@@ -1,0 +1,254 @@
+(* 
+    Copyright 2025 Muhammad Usama Sardar, Mariam Moustafa, and Tuomas Aura.
+    Copyright 2026 Nathanael Ritz.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*)
+
+(*
+    This work is a unique adaptation and extension, developed apart from the original
+    academic model released under the Apache 2.0 license: 
+
+    https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+*)
+
+(*
+Summary: 
+  Server's identity: ID_S associated with pubLTK
+  General organization for modeling: (ID_S,pubAK,pubLTK,pubKEM)
+
+  To guarantee per-connection freshness, this protocol derives a unique "Attestation Binder" 
+  directly from the current TLS handshake transcript, which inherently includes freshly 
+  generated random nonces from both the client and server. 
+  
+  The Trusted Execution Environment (TEE) then includes and signs this specific binder 
+  within its attestation Evidence, cryptographically proving the security metrics are 
+  tied to this exact, real-time connection and preventing any replay of older sessions.
+
+Details:
+  Each server machine is identified by ID_S.
+  The model allows multiple tenants (guest VM) per server machine. 
+
+We want to model that some server machines may be compromised while others remain secure.
+The compromise of a server machine is modelled by leaking privAK or privTIK.
+*)
+
+
+(* Generation of agents and keys *)
+(* All parameters for the server side.
+   agent_keys(ID_S, privLTK, pubLTK, privKEM, pubKEM, privAK, pubAK) *)
+table agent_keys(identity, privkey, pubkey, privkey, pubkey, privkey, pubkey).
+
+(* trust_store(ID_S, pubLTK, pubKEM, server_cert) *)
+table trust_store(identity, pubkey, pubkey, bitstring).
+
+(* Untrusted discovery channel — models DNS/HTTPS lookup of server
+   identity documents.  Used by gen_agents_data (publish) and
+   run_Client (fetch + verify).  *)
+free untrusted_dns: channel.
+
+let gen_agents_data (privCA:privkey) = 
+  (* Imagine the following as generating the data of a single server machine (single agent)
+  and the replication then produces multiple server machines (multi-agent) *)
+
+  (* Attestation Key - Shared per platform *)
+  new privAK: privkey;  (* attestation key for signing evidence *)
+  let pubAK = pk(privAK) in
+  out(io,pubAK); 
+
+  (!(  (* This replication allows to model multiple VMs on the same physical machine
+  which is typical in cloud scenarios. *)
+
+    (* Server side *)
+    new ID_S:identity;  (* long-term identity of the server, e.g., FQDN *)
+    out(io,ID_S);  (* Identity is public *)
+
+    new privLTK: privkey;  (* Long-term Key of Attester *)
+    let pubLTK = pk(privLTK) in
+    out(io,pubLTK);
+
+    (* They also get their own encapsulation KEM *)
+    new privKEM:privkey;
+    let pubKEM = pk(privKEM) in
+    out(io, pubKEM);
+
+    (* Self-sign/Attest to CA for signed identity document *)
+
+    let server_cert = sign(privCA,(ID_S,pubLTK,pubKEM)) in
+    out(io, server_cert);
+    insert trust_store(ID_S,pubLTK,pubKEM,server_cert);
+
+    let identity_doc = (ID_S, pubLTK, pubKEM) in
+    let id_doc_sig = sign(privCA, identity_doc) in
+    
+    (* Publish J/CWT for client pre-handshake lookup.
+       Adversary can observe and attempt substitution; 
+       client verifies with pubCA.                    *)
+    out(untrusted_dns, (identity_doc, id_doc_sig));
+
+    (* Record in the table *)
+    insert agent_keys(ID_S,privLTK,pubLTK,privKEM,pubKEM,privAK,pubAK)
+  ))
+.
+
+(* Mark the event when the keys of a specific machine are leaked
+i.e., not all server machines are compromised at the same time *)
+let LKEM =
+  get agent_keys(_,_,_,privKEM,pubKEM,_,_) in
+  event LeakedKEM(pubKEM);  (* mark the leakage of KEM *)  
+  out(io, privKEM)
+.
+
+let LAK =
+  get agent_keys(ID_S,_,pubLTK,_,pubKEM,privAK,pubAK) in
+  event LeakedAK(pubAK);  (* mark the leakage of AK *)  
+  event LeakedAK2(ID_S,pubLTK,pubAK,pubKEM);  (* mark the leakage of AK with additional parameters *)
+  out(io, privAK)
+.
+
+let LLTK =
+  get agent_keys(_,privLTK,pubLTK,_,_,_,_) in
+  event LeakedLTK(pubLTK);  (* mark the leakage of LTK *)  
+  out(io, privLTK)
+.
+
+let LDHE(g:group,e:element,ee:bitstring) =
+  event LeakedDHE(g,e,ee);
+  out(io, (g,e,ee))
+.
+
+let LEKU(g:group,e:element,ee:bitstring, gxy_eku_secret:bitstring) =
+  event LeakedEKU(g,e,ee,gxy_eku_secret);
+  out(io, (g,e,ee,gxy_eku_secret))
+.
+
+let run_Client(pubCA:pubkey,gxy_eku_secret:bitstring) = 
+  (* Intuitively, the following models a single client (single agent) 
+  and the replication takes care of multiple clients (multi agent) *)
+  new ID_C:identity;  (* long-term identity of the client *)
+
+  (* Choose a server machine (potentially a compromised one) to communicate with. *)
+  !( (* this allows the same client to talk to different servers *)
+
+    (* ID_S (=hostname/FQDN/SAN) is known to the client, e.g., the desired website it wants to connect. *)
+    get agent_keys(ID_S,_,_,_,_,_,_) in
+    get agent_keys(_,_,_,_,_,_,pubAK) in
+
+    (* ── Pre-handshake: fetch and verify server CA cert ── *)
+    in(untrusted_dns, (identity_doc:bitstring, id_doc_sig:bitstring));
+    let (=ID_S, pubLTK_S:pubkey, pubKEM_S:pubkey) = identity_doc in
+    if verify(pubCA, identity_doc, id_doc_sig) = true then
+    (
+      !( (* The following replication models multiple sessions of client with these parameters *)
+        let g = StrongDH in
+        let (x: bitstring, gx: element) = dh_keygen(g) in
+
+        let g_eku = StrongDH in
+        let (x_eku: bitstring, gx_eku: element) = dh_keygen(g_eku) in
+        (
+          Client(ID_C, ID_S, pubLTK_S, pubKEM_S, pubAK, pubCA, g,gx,x, g_eku,gx_eku,x_eku, gxy_eku_secret)
+        )
+        | (LDHE(g,gx,x))
+        | (LEKU(g_eku,gx_eku,x_eku, gxy_eku_secret))
+      )
+    )
+  )
+.
+
+let run_Server(gxy_eku_secret:bitstring) = 
+  (* Intuitively, this models a single server and the replication takes care of multiple servers *)
+  (* Allow several combinations, but for each private key, choose the corresponding public key *)
+  get agent_keys(ID_S,_,_,_,_,_,_) in
+  get agent_keys(_,privLTK,pubLTK,_,_,_,_) in
+  get agent_keys(_,_,_,privKEM,pubKEM,_,_) in
+  get agent_keys(_,_,_,_,_,privAK,pubAK) in
+
+  (* retrieve the cert matching the ID *)
+  get trust_store(=ID_S,_,_,server_cert) in (* Not used by the original TLS-a spec *)
+
+  !( (* The following replication models multiple sessions of server with these parameters *)
+    let g = StrongDH in
+    let (y:bitstring,gy:element) = dh_keygen(g) in
+
+    let g_eku = StrongDH in
+    let (y_eku:bitstring,gy_eku:element) = dh_keygen(g_eku) in
+    (
+      Server(ID_S,privLTK,privKEM,privAK,NULL_ID,server_cert, g,gy,y, g_eku,gy_eku,y_eku, gxy_eku_secret)
+    )
+    | (LDHE(g,gy,y))
+    | (LEKU(g_eku,gy_eku,y_eku, gxy_eku_secret))
+  )
+.
+
+(* ~==================================================~ *)
+(* Topology                                             *)
+(* ~==================================================~ 
+
+              Infrastructure Topology
+ .---------------------------------------------.
+ | .--------------------.  .-----------------. |
+ | |     Machine 1      |  |    Machine 2    | |
+ | |                    |  |                 | |
+ | | +------+ +------+  |  | +------+        | |
+ | | |ID_S1 | |ID_S2 |  |  | |ID_S3 |  ...   | |
+ | | |prLTK1| |prLTK2|  |  | |prLTK3|        | |
+ | | +------+ +------+  |  | +------+        | |
+ | '---------+----------'  '---------+-------' |
+ |           ^                       ^         |
+ |           | shared                | shared  |
+ |       .-----------------------------.       |
+ |       |        Platform/CSP A       |       |
+ |       |          privAK_A           |       |
+ |       '-----------------------------'       |
+ |                                             |
+ |           .------------------------.        |
+ |      +----|     Platform/CSP B     |        |
+ |      |    |        privAK_B        |        |
+ |      v    '------------------------'        |
+ |   .--+----------------------------------.   |
+ |   |             Machine n               |   |
+ |   | +------+ +------+ +------+          |   |
+ |   | |ID_S4 | |ID_S5 | |ID_S n|  ...     |   |
+ |   | |prLTK4| |prLTK5| |prLTKn|          |   |
+ |   | +------+ +------+ +------+          |   |
+ |   '-------------------------------------'   |
+ '---------------------------------------------'
+
+  Each unique platform shares the same trusted 
+  private Attestation Key (AK). Each unique CVM/Tenant has 
+  it's own unique Identity Key (LTK). 
+
+*)
+
+(* set reconstructTrace = false. *)
+(* set verboseClauses = explained. *)
+
+(* set traceDisplay = long. Display full trace *)
+(* set verboseClauses = short. *)
+(* main system *)
+(* process 0 *)
+process
+  (* Web PKI CA *)
+  new privCA:privkey; 
+  let pubCA = pk(privCA) in 
+  out(io,pubCA);
+
+  (* Axiomic gxy secret for EKU *)
+  new gxyEKU:bitstring;
+
+  !(gen_agents_data(privCA))
+  | !(run_Client(pubCA,gxyEKU)) | !(run_Server(gxyEKU))
+  | !(LAK)
+  | !(LLTK)
+  | !(LKEM)
+  | !(SendBadElement)

@@ -1,0 +1,397 @@
+(* 
+    Copyright 2025 Muhammad Usama Sardar, Mariam Moustafa, and Tuomas Aura.
+    Copyright 2026 Nathanael Ritz.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*)
+
+(*
+    This work is a unique adaptation and extension, developed apart from the original
+    academic model released under the Apache 2.0 license: 
+
+    https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+*)
+
+(***********************************)
+(* Lemmas                          *)
+(***********************************)
+
+(*
+  Secrecy of attest_psk depends on KEM.
+  CN1 is sealed to pubKEM_S under HPKE; the only way to recover it is
+  with privKEM_S. If the attacker holds attest_psk, they must hold privKEM.
+*)
+
+lemma attest_psk:bitstring, pubKEM:pubkey, privKEM:privkey;
+  event(ClientDerivesPSK(attest_psk, pubKEM)) && attacker(attest_psk) ==> attacker(privKEM).
+
+(*
+  Link KEM private key knowledge to the LeakedKEM event.
+  Ensures secrecy queries involving LeakedKEM are non-vacuous.
+*)
+lemma pubKEM:pubkey;
+  attacker(new privKEM) ==> event(LeakedKEM(pubKEM))
+[induction].
+
+(*
+  privAK secrecy.
+  The attestation signing key never leaves the TEE except via the explicit
+  compromise branch.
+  Result: true.
+*)
+lemma pubAK:pubkey;
+  attacker(new privAK) ==> event(LeakedAK(pubAK))
+[induction].
+
+(*
+  privLTK secrecy.
+  The TLS Identity Key signs CertificateVerify; its compromise is the
+  sole condition under which TLS identity binding fails.
+  Result: true.
+*)
+lemma pubLTK:pubkey;
+  attacker(new privLTK) ==> event(LeakedLTK(pubLTK))
+[induction].
+
+(**********************************************************************)
+(* Sanity Checks (Reachability): should all be false = event is reachable *)
+(**********************************************************************)
+(* should be false (confirms event is reachable) *)
+
+query pubAK:pubkey;
+  event(LeakedAK(pubAK)).
+
+query pubLTK:pubkey;
+  event(LeakedLTK(pubLTK)).
+
+query pubKEM:pubkey;
+  event(LeakedKEM(pubKEM)).
+
+query g:group, e:element, ee:bitstring;
+  event(LeakedDHE(g,e,ee)).
+
+query g:group, e:element, ee:bitstring, gxy_eku:bitstring;
+  event(LeakedEKU(g,e,ee,gxy_eku)).
+
+(* should be false (confirms both events are reachable) 
+i.e., there exists a trace where *both* ServerID and ClientID 
+are reachable with a shared/common gxy *)
+query idS, idXS: identity, gxy:bitstring;  
+  (event(ServerID(idS,gxy)) &&
+   event(ClientID(idXS,gxy))).
+
+(* should be false (confirms both events are reachable) 
+i.e., there exists a trace where *both* ServerID and ClientID 
+are reachable with a shared/common post-handshake EKU derived gxy *)
+query idS, idXS: identity, gxy:bitstring;  
+  (event(ServerEKU(idS,gxy)) &&
+   event(ClientEKU(idXS,gxy))).
+
+(*******************************************)
+(** INTRA-HANDSHAKE SECRECY AND AGREEMENT **)
+(*******************************************)
+
+(* With all RA and TLS arguments
+LTK + KEM Compromised, AK secure. Result: true *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      ID:identity, gxy_eku:bitstring, 
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+      
+    attacker(kc) &&
+    event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+    event(LeakedDHE(g,e,ee)) ||
+    event(LeakedAK(pubAK))
+.
+
+(* AK + KEM Compromised, LTK secure. Result: true *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      ID:identity, gxy_eku:bitstring,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+      
+    attacker(kc) &&
+    event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+    event(LeakedDHE(g,e,ee)) ||
+    event(LeakedLTK(pubLTK))
+.
+
+(* AK + LTK Compromised, KEM secure. Result: true *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      ID:identity, gxy_eku:bitstring,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+      
+    attacker(kc) &&
+    event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+    event(LeakedDHE(g,e,ee)) ||
+    event(LeakedKEM(pubKEM))
+.
+
+(* Prove keys are load-bearing on key secrecy *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      ID:identity, gxy_eku:bitstring,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+      
+   attacker(kc) &&
+   event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+   event(LeakedDHE(g,e,ee))
+.
+
+(* If KEM && LTK is leaked, does AK maintain integrity for agreement on all intra-handshake parameters?  *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
+      
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+  inj-event(PreServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state))
+    ||
+  event(LeakedDHE(g,e,ee)) ||
+  event(LeakedAK(pubAK))
+.
+
+(* If AK && KEM is leaked, does LTK maintain integrity for agreement on all intra-handshake parameters? *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
+
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+  inj-event(PreServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state))
+    ||
+  event(LeakedDHE(g,e,ee)) ||
+  event(LeakedLTK(pubLTK))
+.
+
+(* If AK && LTK is leaked, does KEM maintain maintain integrity for agreement on all intra-handshake parameters?  *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
+
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+  inj-event(PreServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state))
+    ||
+  event(LeakedDHE(g,e,ee)) ||
+  event(LeakedKEM(pubKEM))
+.
+
+(* Prove keys are load-bearing on injective agreement *)
+(* Returns "true" vacuously if real DH exchange is stubbed! *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
+
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+  inj-event(PreServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state))
+    ||
+  event(LeakedDHE(g,e,ee))
+.
+
+(* Prove keys are load-bearing on injective agreement *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
+
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state)) ==>
+  inj-event(PreServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state))
+.
+
+(* Reachability proof: should return "not [...] false" *)
+query pubKEM:pubkey, pubAK:pubkey, pubLTK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, ID_S:identity, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
+
+  event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state))
+    &&
+  event(PreServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state))
+.
+
+(****************************************)
+(** POST EKU KEY SECRECY AND AGREEMENT **)
+(****************************************)
+
+(* KEM + LTK Compromised, AK secure. Result: true *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  attacker(eku_key) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  event(LeakedEKU(g,e,ee,gxy_eku)) ||
+  event(LeakedAK(pubAK))
+.
+
+(* KEM + AK Compromised, LTK secure. Result: true *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  attacker(eku_key) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  event(LeakedEKU(g,e,ee,gxy_eku)) ||
+  event(LeakedLTK(pubLTK))
+.
+
+(* LTK + AK Compromised, KEM secure. Result: true *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  attacker(eku_key) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  event(LeakedEKU(g,e,ee,gxy_eku)) ||
+  event(LeakedKEM(pubKEM))
+.
+
+(* Prove keys are load-bearing on key secrecy *)
+(* Returns "true" vacuously if real DH exchange is stubbed! *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  attacker(eku_key) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  event(LeakedEKU(g,e,ee,gxy_eku))
+.
+
+(* Prove keys are load-bearing on key secrecy, should return "not [...] false" *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  attacker(eku_key) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+.
+
+(* If KEM && LTK is leaked, does AK maintain integrity for agreement on all post-handshake parameters?  *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ||
+  event(LeakedEKU(g,e,ee,gxy_eku)) ||
+  event(LeakedAK(pubAK))
+.
+
+(* If KEM && AK is leaked, does LTK maintain integrity for agreement on all post-handshake parameters?  *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ||
+  event(LeakedEKU(g,e,ee,gxy_eku)) ||
+  event(LeakedLTK(pubLTK))
+.
+
+(* If LTK && AK is leaked, does KEM maintain integrity for agreement on all post-handshake parameters?  *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ||
+  event(LeakedEKU(g,e,ee,gxy_eku)) ||
+  event(LeakedKEM(pubKEM))
+.
+
+(* Prove keys are load-bearing on injective agreement *)
+(* Returns "true" vacuously if real DH exchange is stubbed! *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ||
+  event(LeakedEKU(g,e,ee,gxy_eku))
+.
+
+(* Prove keys are load-bearing on injective agreement *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+.
+
+(* Reachability proof: should return "not [...] false" *)
+query ID_S:identity, pubLTK:pubkey, pubAK:pubkey, pubKEM:pubkey,
+      psk:preSharedKey, cr:random, sr:random, e:element, g:group, ee:bitstring,
+      offer:params, mode:params, dev_state:bitstring, gxy_eku:bitstring,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring, eku_key:bitstring, attest_psk:bitstring;
+
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+    &&
+  event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, cr, sr, pubKEM, dev_state, gxy_eku, app_data, eku_key, attest_psk))
+.
+
