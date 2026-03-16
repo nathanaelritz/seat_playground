@@ -20,6 +20,9 @@
     academic model released under the Apache 2.0 license: 
 
     https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+
+    Original TLS 1.3 library model produced by Blanchet et al. is available
+    at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
 *)
 
 (*
@@ -183,7 +186,7 @@ let run_Server(gxy_eku_secret:bitstring) =
     let g_eku = StrongDH in
     let (y_eku:bitstring,gy_eku:element) = dh_keygen(g_eku) in
     (
-      Server(ID_S,privLTK,privKEM,privAK,NULL_ID,server_cert, g,gy,y, g_eku,gy_eku,y_eku, gxy_eku_secret)
+      Server(ID_S,privLTK,privKEM,privAK,NULL_ID,server_cert, gy,y, g_eku,gy_eku,y_eku, gxy_eku_secret)
     )
     | (LDHE(g,gy,y))
     | (LEKU(g_eku,gy_eku,y_eku, gxy_eku_secret))
@@ -229,6 +232,7 @@ let run_Server(gxy_eku_secret:bitstring) =
   it's own unique Identity Key (LTK). 
 
 *)
+
 
 (* set reconstructTrace = false. *)
 (* set verboseClauses = explained. *)

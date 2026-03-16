@@ -20,6 +20,9 @@
     academic model released under the Apache 2.0 license: 
 
     https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+
+    Original TLS 1.3 library model produced by Blanchet et al. is available
+    at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
 *)
 
 (**********************************************************************)
@@ -48,20 +51,20 @@ query cr:random, sr:random, cr':random, sr':random,
   event(PostServerFinished(pubLTK, pubAK, psk, cr, sr, offer, mode, kc, ks, ems, rms))
 .
 
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-  event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+  event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state))
 .
 
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-  event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+  event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state))
 .
 
 (**********************************************************************)
@@ -111,7 +114,7 @@ Formalization:
 Result: true
 *)
 query cr:random, sr:random, cr':random, sr':random,
-      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubEK:pubkey,
+      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubAIK:pubkey,
       psk:preSharedKey, p:pubkey, e:element,
       offer:params, mode:params,
       kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
@@ -123,7 +126,7 @@ query cr:random, sr:random, cr':random, sr':random,
 
 (* Reachability proof *)
 query cr:random, sr:random, cr':random, sr':random,
-      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubEK:pubkey,
+      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubAIK:pubkey,
       psk:preSharedKey, p:pubkey, e:element,
       offer:params, mode:params,
       kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
@@ -147,12 +150,11 @@ Formalization:
   Need for "&& ClientFinished": It binds the attacker knows the specific key that the client 
   has accepted and is going to use in communication. This excludes other time points in the
   protocol when the handshake has not yet completed. 
-Result: should be false 
-  Fixed in next query (proving privEK is an essential load-bearing key)
-Interpretation:  Protocol cannot survive compromise of either privAK or privEK.
+Result: true
+Interpretation:  Protocol can survive with AK assumption alone; privAIK is not essential for kc secrecy.
 *)
 query cr:random, sr:random, cr':random, sr':random,
-      ID:identity,pubLTK:pubkey,anyAK:pubkey,pubEK:pubkey,pubAK:pubkey,
+      ID:identity,pubLTK:pubkey,anyAK:pubkey,pubAIK:pubkey,pubAK:pubkey,
       psk:preSharedKey, p:pubkey, e:element,
       offer:params, mode:params,
       kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
@@ -164,9 +166,9 @@ query cr:random, sr:random, cr':random, sr':random,
       event(LeakedAK(anyAK))
 .
 
-(* Add the assumption that privEK has not leaked *)
+(* Add the assumption that privAIK has not leaked *)
 query cr:random, sr:random, cr':random, sr':random,
-      ID:identity,pubLTK:pubkey,anyAK:pubkey,pubEK:pubkey,pubAK:pubkey,
+      ID:identity,pubLTK:pubkey,anyAK:pubkey,pubAIK:pubkey,pubAK:pubkey,
       psk:preSharedKey, p:pubkey, e:element,
       offer:params, mode:params,
       kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
@@ -176,12 +178,12 @@ query cr:random, sr:random, cr':random, sr':random,
       event(ServerChoosesHash(cr',sr',WeakHash)) ||
       event(SentBadElement) ||
       event(LeakedAK(anyAK)) ||
-      event(LeakedEK(pubEK))
+      event(LeakedEK(pubAIK))
 .
 
 (* Repeat with event WithBothPub and precise pubAK associated with session *)
 query cr:random, sr:random, cr':random, sr':random,
-      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubEK:pubkey,
+      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubAIK:pubkey,
       psk:preSharedKey, p:pubkey, e:element,
       offer:params, mode:params,
       kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
@@ -193,9 +195,9 @@ query cr:random, sr:random, cr':random, sr':random,
       event(LeakedAK(pubAK))
 .
 
-(* Repeat with event WithBothPub and precise pubAK associated with session, add pubEK *)
+(* Repeat with event WithBothPub and precise pubAK associated with session, add pubAIK *)
 query cr:random, sr:random, cr':random, sr':random,
-      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubEK:pubkey,
+      ID:identity,pubLTK:pubkey,pubAK:pubkey,pubAIK:pubkey,
       psk:preSharedKey, p:pubkey, e:element,
       offer:params, mode:params,
       kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
@@ -205,40 +207,23 @@ query cr:random, sr:random, cr':random, sr':random,
       event(ServerChoosesHash(cr',sr',WeakHash)) ||
       event(SentBadElement) ||
       event(LeakedAK(pubAK)) ||
-      event(LeakedEK(pubEK))
+      event(LeakedEK(pubAIK))
 .
 
 (* With all RA and TLS arguments without AK assumption
 Result: false *)
-query pubEK:pubkey,dev_state:bitstring,quote:bitstring,
+query pubAIK:pubkey,dev_state:bitstring,quote:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       ID:identity,pubLTK:pubkey,pubAK:pubkey,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
       attacker(kc) &&
-      event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
+      event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
       event(ServerChoosesKEX(cr,sr,DHE_13(WeakDH,e))) ||
       event(ServerChoosesHash(cr',sr',WeakHash)) ||
       event(SentBadElement) ||
-      event(LeakedEK(pubEK))
-.
-
-(* With all RA and TLS arguments, with full key assumptions
-Result: true - protocol cannot survive compromise of either privAK or privEK *)
-query pubEK:pubkey,dev_state:bitstring,quote:bitstring,
-      cr:random, sr:random, cr':random, sr':random,
-      ID:identity,pubLTK:pubkey,pubAK:pubkey,
-      psk:preSharedKey, e:element,
-      offer:params, mode:params, ID_S:identity,
-      kc:ae_key,ks:ae_key,ems:bitstring,rms:bitstring;
-      attacker(kc) &&
-      event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-      event(ServerChoosesKEX(cr,sr,DHE_13(WeakDH,e))) ||
-      event(ServerChoosesHash(cr',sr',WeakHash)) ||
-      event(SentBadElement) ||
-      event(LeakedAK(pubAK)) ||
-      event(LeakedEK(pubEK))
+      event(LeakedEK(pubAIK))
 .
 
 
@@ -329,25 +314,25 @@ Interpretation of result: Cryptographic binding of RA and TLS protocols is stron
 
 (* If AK is leaked, does pubLTK maintain integrity? 
 Result: false without DHE assumptions *)
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ||
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
+  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ||
   event(LeakedLTK(pubLTK))
 .
 
 (* If AK is leaked, does pubLTK maintain integrity, with extra assumptions? 
 Result: true *)
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ||
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
+  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ||
   event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
   event(ServerChoosesHash(cr', sr', WeakHash)) ||
   event(LeakedLTK(pubLTK))
@@ -355,25 +340,25 @@ query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
 
 (* If LTK is leaked, does AK maintain integrity? 
 Result: false without DHE assumptions *)
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ||
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
+  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ||
   event(LeakedAK(pubAK))
 .
 
 (* If LTK is leaked, does AK maintain integrity, with extra assumptions? 
 Result: true *)
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ||
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
+  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ||
   event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
   event(ServerChoosesHash(cr', sr', WeakHash)) ||
   event(LeakedAK(pubAK))
@@ -381,36 +366,194 @@ query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
 
 (* If EK (AIK) is leaked, does the compound agreement hold? 
 Result: false without DHE assumptions *)
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ||
-  event(LeakedEK(pubEK))
+inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
+  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ||
+  event(LeakedEK(pubAIK))
 .
 
 (* If EK (AIK) is leaked, does the compound agreement hold, with extra assumptions? 
-Result: true *)
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+Result: false *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ||
+inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
+  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ||
   event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
   event(ServerChoosesHash(cr', sr', WeakHash)) ||
-  event(LeakedEK(pubEK))
+  event(LeakedEK(pubAIK))
 .
 
 (* Sanity check: should be false *)
-query pubLTK:pubkey, pubAK:pubkey, pubEK:pubkey, dev_state:bitstring,
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
       cr:random, sr:random, cr':random, sr':random,
       psk:preSharedKey, e:element,
       offer:params, mode:params, ID_S:identity,
       kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring;
-  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state)) ==>
-  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+  inj-event(ClientComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state)) ==>
+  inj-event(PostServerComp(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state))
+.
+
+(****************************************)
+(** POST-HANDSHAKE APP DATA            **)
+(** KEY SECRECY AND AGREEMENT          **)
+(****************************************)
+
+(* LTK + EK Compromised, AK secure. Result: true *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  attacker(ks) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
+  event(ServerChoosesHash(cr', sr', WeakHash)) ||
+  event(SentBadElement) ||
+  event(LeakedAK(pubAK))
+.
+
+(* AK + EK Compromised, LTK secure. Result: true *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  attacker(ks) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
+  event(ServerChoosesHash(cr', sr', WeakHash)) ||
+  event(SentBadElement) ||
+  event(LeakedLTK(pubLTK))
+.
+
+(* AK + LTK Compromised, EK secure. Result: true *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  attacker(ks) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
+  event(ServerChoosesHash(cr', sr', WeakHash)) ||
+  event(SentBadElement) ||
+  event(LeakedEK(pubAIK))
+.
+
+(* Prove keys are load-bearing on post-handshake key secrecy.
+Result: false *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  attacker(ks) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
+  event(ServerChoosesHash(cr', sr', WeakHash)) ||
+  event(SentBadElement)
+.
+
+(* Reachability proof: should be false *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  attacker(ks) &&
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data))
+.
+
+(* If AK + EK is leaked, does pubLTK maintain integrity for post-handshake agreement?
+Result: true *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ||
+  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
+  event(ServerChoosesHash(cr', sr', WeakHash)) ||
+  event(SentBadElement) ||
+  event(LeakedLTK(pubLTK))
+.
+
+(* If LTK + EK is leaked, does AK maintain integrity for post-handshake agreement?
+Result: true *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ||
+  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
+  event(ServerChoosesHash(cr', sr', WeakHash)) ||
+  event(SentBadElement) ||
+  event(LeakedAK(pubAK))
+.
+
+(* If AK + LTK is leaked, does EK maintain integrity for post-handshake agreement?
+Result: false *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ||
+  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
+  event(ServerChoosesHash(cr', sr', WeakHash)) ||
+  event(SentBadElement) ||
+  event(LeakedEK(pubAIK))
+.
+
+(* Prove keys are load-bearing on post-handshake injective agreement.
+Result: false *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
+  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data))
+.
+
+(* Reachability proof: should be false *)
+query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
+      cr:random, sr:random, cr':random, sr':random,
+      psk:preSharedKey, e:element,
+      offer:params, mode:params, ID_S:identity,
+      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
+      app_data:bitstring;
+
+  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data))
+    &&
+  event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data))
 .

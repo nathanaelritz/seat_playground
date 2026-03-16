@@ -20,6 +20,9 @@
     academic model released under the Apache 2.0 license: 
 
     https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+
+    Original TLS 1.3 library model produced by Blanchet et al. is available
+    at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
 *)
 
 (***********************************)
@@ -33,15 +36,16 @@
 *)
 
 lemma attest_psk:bitstring, pubKEM:pubkey, privKEM:privkey;
-  event(ClientDerivesPSK(attest_psk, pubKEM)) && attacker(attest_psk) ==> attacker(privKEM).
+  event(ClientDerivesPSK(attest_psk, pubKEM)) && attacker(attest_psk) ==> attacker(privKEM)
+[induction]. (* This is not a litigated query. Run this axiom as a lemma as needed to prove soundness *)
 
 (*
   Link KEM private key knowledge to the LeakedKEM event.
   Ensures secrecy queries involving LeakedKEM are non-vacuous.
 *)
-lemma pubKEM:pubkey;
+query pubKEM:pubkey;
   attacker(new privKEM) ==> event(LeakedKEM(pubKEM))
-[induction].
+.
 
 (*
   privAK secrecy.
@@ -49,9 +53,9 @@ lemma pubKEM:pubkey;
   compromise branch.
   Result: true.
 *)
-lemma pubAK:pubkey;
+query pubAK:pubkey;
   attacker(new privAK) ==> event(LeakedAK(pubAK))
-[induction].
+.
 
 (*
   privLTK secrecy.
@@ -59,9 +63,9 @@ lemma pubAK:pubkey;
   sole condition under which TLS identity binding fails.
   Result: true.
 *)
-lemma pubLTK:pubkey;
+query pubLTK:pubkey;
   attacker(new privLTK) ==> event(LeakedLTK(pubLTK))
-[induction].
+.
 
 (**********************************************************************)
 (* Sanity Checks (Reachability): should all be false = event is reachable *)
@@ -96,6 +100,20 @@ are reachable with a shared/common post-handshake EKU derived gxy *)
 query idS, idXS: identity, gxy:bitstring;  
   (event(ServerEKU(idS,gxy)) &&
    event(ClientEKU(idXS,gxy))).
+
+(* should be false (confirms both events are reachable) 
+i.e., there exists a trace where *both* ServerID and ClientID 
+are reachable with a shared/common gxy *)
+query idS, idXS: identity, gxy:bitstring;  
+  (event(ServerID(idS,gxy)) &&
+   event(ClientID(idXS,gxy))) ==> event(SentBadElement).
+
+(* should be false (confirms both events are reachable) 
+i.e., there exists a trace where *both* ServerID and ClientID 
+are reachable with a shared/common post-handshake EKU derived gxy *)
+query idS, idXS: identity, gxy:bitstring;  
+  (event(ServerEKU(idS,gxy)) &&
+   event(ClientEKU(idXS,gxy))) ==> event(SentBadElement).
 
 (*******************************************)
 (** INTRA-HANDSHAKE SECRECY AND AGREEMENT **)

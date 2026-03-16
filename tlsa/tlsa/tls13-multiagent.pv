@@ -25,16 +25,23 @@
     at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
 *)
 
+(* rm -R ./traces; mkdir -p ./traces;
+time docker run --rm -v "$(pwd)":/work my-proverif \
+  -lib work/tls-lib-only.pvl \
+  -lib work/queries.pvl \
+  -lib work/handshake.pvl \
+  -html work/traces work/tls13-multiagent.pv 2>&1 | tee log-top.txt *)
+
 (* 
 Summary: 
   Server's identity: ID_S associated with pubLTK
-  Key associated with VM identity: pubAIK (Note: initially unknown; until after successful attestation)
-  General organization for modeling: (ID_S,pubLTK,pubAK,pubAIK)
+  Key associated with VM identity: pubEK (Note: initially unknown; until after successful attestation)
+  General organization for modeling: (ID_S,pubLTK,pubAK,pubEK)
 
 Details:
   Each server machine is identified by ID_S.
   The model allows multiple tenants (guest VM) per server machine. 
-  So multiple pubAIK per server machine. 
+  So multiple pubEK per server machine. 
 
 We want to model that some server machines may be compromised while others remain secure.
 The compromise of a server machine is modelled by leaking privAK or privLTK.
@@ -79,15 +86,15 @@ let gen_agents_data (privCA:privkey) =
 
 (* Mark the event when the keys of a specific machine are leaked
 i.e., not all server machines are compromised at the same time *)
-let LAIK(privAIK:privkey,pubAIK:pubkey) =
-  event LeakedAIK(pubAIK);  (* mark the leakage of EK *)
-  out(io, privAIK)
+let LEK(privEK:privkey,pubEK:pubkey) =
+  event LeakedEK(pubEK);  (* mark the leakage of EK *)
+  out(io, privEK)
 .
 
 let LAK =
   get agent_keys(ID_S,_,pubLTK,privAK,pubAK) in
   event LeakedAK(pubAK);  (* mark the leakage of AK *)  
-  event LeakedAK2(ID_S,pubLTK,pubAK);  (* mark the leakage of AK with additional parameters *)
+  event LeakedAK2(ID_S,pubLTK,pubAK,NULL_pubkey);  (* mark the leakage of AK with additional parameters *)
   out(io, privAK)
 .
 
@@ -107,12 +114,10 @@ let run_Client(pubCA:pubkey) =
 
     (* ID_S (=hostname/FQDN/SAN) is known to the client, e.g., the desired website it wants to connect. *)
     get agent_keys(ID_S,_,_,_,_) in
-    get agent_keys(_,_,_,_,pubAK) in 
-
-    (* get agent_keys(ID_S,_,_,_,pubAK) in *)
+    get agent_keys(_,_,_,_,pubAK) in
 
     (* The following replication models multiple sessions of client with these parameters *)
-    !Client(ID_C, ID_S, pubAK, pubCA)
+    !Client(ID_C,ID_S,NULL_pubkey,pubAK)
   ))
 .
 
@@ -121,22 +126,20 @@ let run_Server =
   (* Allow several combinations, but for each private key, choose the corresponding public key *)
   get agent_keys(ID_S,_,_,_,_) in
   get agent_keys(_,privLTK,pubLTK,_,_) in
-  get agent_keys(_,_,_,privAK,pubAK) in 
+  get agent_keys(_,_,_,privAK,pubAK) in
 
-  (* get agent_keys(ID_S,privLTK,pubLTK,privAK,pubAK) in *)
-
-  (* EK as AIK for EXPAT *) 
+  (* VM key for TLS-a *) 
   (* Note: initially unknown; until after successful attestation *)
-  new privAIK: privkey;  
-  let pubAIK = pk(privAIK) in
-  out(io,pubAIK); 
+  new privEK: privkey;  
+  let pubEK = pk(privEK) in
+  out(io,pubEK); 
 
   (* retrieve the cert matching the ID *)
   get trust_store(=ID_S,_,server_cert) in (* Not used by the original TLS-a spec *)
 
   (* The following replication models multiple sessions of server with these parameters *)
-    !(Server(ID_S,privLTK,privAK,privAIK,NULL_ID,server_cert))
-    | !(LAIK(privAIK,pubAIK))
+    !(Server(ID_S,privLTK,privAK,privEK,NULL_ID))
+    | !(LEK(privEK,pubEK))
 .
 
 (* ~==================================================~ *)
@@ -178,69 +181,6 @@ let run_Server =
   it's own unique Identity Key (LTK). 
 
 *)
-
-(* If LTK + EK is leaked, does AK maintain integrity for post-handshake agreement?
-Result: true 
-query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
-      cr:random, sr:random, cr':random, sr':random,
-      psk:preSharedKey, e:element,
-      offer:params, mode:params, ID_S:identity,
-      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
-      app_data:bitstring;
-
-  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
-  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ||
-  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
-  event(ServerChoosesHash(cr', sr', WeakHash)) ||
-  event(SentBadElement) ||
-  event(LeakedAK(pubAK))
-.
-
-(* If AK + LTK is leaked, does EK maintain integrity for post-handshake agreement?
-Result: false *)
-query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
-      cr:random, sr:random, cr':random, sr':random,
-      psk:preSharedKey, e:element,
-      offer:params, mode:params, ID_S:identity,
-      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
-      app_data:bitstring;
-
-  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
-  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ||
-  event(ServerChoosesKEX(cr, sr, DHE_13(WeakDH, e))) ||
-  event(ServerChoosesHash(cr', sr', WeakHash)) ||
-  event(SentBadElement) ||
-  event(LeakedEK(pubAIK))
-.
-
-(* Prove keys are load-bearing on post-handshake injective agreement.
-Result: false *)
-query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
-      cr:random, sr:random, cr':random, sr':random,
-      psk:preSharedKey, e:element,
-      offer:params, mode:params, ID_S:identity,
-      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
-      app_data:bitstring;
-
-  inj-event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data)) ==>
-  inj-event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data))
-.
-
-(* Reachability proof: should be false *)
-query pubLTK:pubkey, pubAK:pubkey, pubAIK:pubkey, dev_state:bitstring,
-      cr:random, sr:random, cr':random, sr':random,
-      psk:preSharedKey, e:element,
-      offer:params, mode:params, ID_S:identity,
-      kc:ae_key, ks:ae_key, ems:bitstring, rms:bitstring,
-      app_data:bitstring;
-
-  event(ClientReceivesAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data))
-    &&
-  event(ServerSendsAppData(ID_S, pubLTK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubAIK, dev_state, app_data))
-.
-*)
-(* set reconstructTrace = false. *)
-set verboseClauses = explained.
 
 (* set traceDisplay = long. Display full trace *)
 (* set verboseClauses = short. *)

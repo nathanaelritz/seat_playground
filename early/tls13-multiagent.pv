@@ -20,6 +20,9 @@
     academic model released under the Apache 2.0 license: 
 
     https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+
+    Original TLS 1.3 library model produced by Blanchet et al. is available
+    at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
 *)
 
 (* 

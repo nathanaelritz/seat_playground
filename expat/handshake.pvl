@@ -20,6 +20,9 @@
     academic model released under the Apache 2.0 license: 
 
     https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+
+    Original TLS 1.3 library model produced by Blanchet et al. is available
+    at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
 *)
 
 (********************************************************)
@@ -27,17 +30,17 @@
 (* RFC 9261 Exported Authenticator exchange             *)
 (********************************************************)
 
-fun Cert(pubkey, bitstring): msg [data].
 (* Standard TLS Certificate: (pubLTK, CA-signed cert); used in the main handshake only *)
+fun Cert(pubkey, bitstring): msg [data].
 
-fun EACert(pubkey): msg [data].
 (* EA Certificate [RFC 9261 sect. 5.2.1; EXPAT sect. 5.2] *)
+fun EACert(pubkey): msg [data].
 
-fun AuthReq(bitstring): msg [data].
 (* Exported Authenticator Request; arg = cert_req_context (fresh nonce from client) *)
+fun AuthReq(bitstring): msg [data].
 
-fun EABundle(pubkey, bitstring, bitstring, bitstring): msg [data].
 (* EA response: (pubAIK, cmw_data, ea_cv_sig, ea_fin_mac) *)
+fun EABundle(pubkey, bitstring, bitstring, bitstring): msg [data].
 
 (* EncryptedExtensions — RFC 8446 §4.3.1 *)
 type tls_ext.
@@ -63,6 +66,41 @@ reduc forall x:bitstring;
 (* TLS 1.3 CertificateVerify context string *)
 const server_cv_context: bitstring.
 const client_cv_context: bitstring.
+
+(********************************************************)
+(* Post-handshake application data primitives            *)
+(********************************************************)
+
+(* Symmetric encryption for post-handshake records *)
+fun ph_msg(bitstring, bitstring): bitstring.
+reduc forall phdata:bitstring, k:bitstring;
+  ph_read(ph_msg(phdata, k), k) = phdata.
+
+(* Type converter: ae_key → bitstring *)
+fun ae2b(ae_key): bitstring [data, typeConverter].
+
+(* Content Type Tags to prevent Type Confusion *)
+fun EA_type(bitstring): bitstring [data].
+fun App_type(bitstring): bitstring [data].
+
+(* Application data events *)
+(* ClientReceivesAppData(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr,pubEK,dev_state,app_msg) *)
+event ClientReceivesAppData(identity,
+      pubkey,pubkey,preSharedKey,
+      params,params,
+      ae_key,ae_key,bitstring,bitstring,
+      random,random,
+      pubkey,bitstring,
+      bitstring).
+
+(* ServerSendsAppData(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr,pubEK,dev_state,app_msg) *)
+event ServerSendsAppData(identity,
+      pubkey,pubkey,preSharedKey,
+      params,params,
+      ae_key,ae_key,bitstring,bitstring,
+      random,random,
+      pubkey,bitstring,
+      bitstring).
 
 (********************************************************)
 (* Client                                               *)
@@ -100,7 +138,7 @@ let Client(ID_C:identity, ID_S:identity, pubAK:pubkey, pubCA:pubkey) =
 
   (*******************************)
   (* Receive EncryptedExtensions — RFC 8446 sect. 4.3.1 *)
-  in(io, EE(EExts));
+  in(io, EE(=EExts));
   (*******************************)
 
   let nego(=aTLS, DHE_13(=g,gy), shash_algo, sev_type) = mode in
@@ -162,12 +200,13 @@ let Client(ID_C:identity, ID_S:identity, pubAK:pubkey, pubCA:pubkey) =
 
       (********************************************)
       (* Send AuthenticatorRequest — RFC 9261 sect. 5 *)
-      out(io, AuthReq(cert_req_context));
+      out(io, ph_msg(EA_type(msg2bytes(AuthReq(cert_req_context))), ae2b(kc)));
       (********************************************)
 
       (********************************************)
       (* Receive EABundle — RFC 9261 sect. 6 *)
-      in(io, EABundle(pubAIK, cmw_data, ea_cv_sig, ea_fin_mac));
+      in(io, ea_enc: bitstring);
+      let EA_type(msg2bytes(EABundle(pubAIK, cmw_data, ea_cv_sig, ea_fin_mac))) = ph_read(ea_enc, ae2b(ks)) in
       (********************************************)
 
       (* Attestation Binder [EXPAT sect. 5.1; RFC 8446 sect. 7.5] *)
@@ -199,11 +238,11 @@ let Client(ID_C:identity, ID_S:identity, pubAK:pubkey, pubCA:pubkey) =
           event AcceptedWithPubLTK(cmw_data, pubLTK, pubAK);
           event ClientConn(cmw_data, pubAK);
           event ClientComp(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr,pubAIK,dev_status1);
-          event ClientRA(pubAK, pubLTK, dev_status1, cmw_data);
-          event ClientRA2(pubAK, pubLTK, dev_status1);
-          event ClientRA3(pubAK, pubLTK, dev_status1, ID_C);
-          event ClientRAWithoutAK(pubLTK, dev_status1, cmw_data);
-          event ClientRANew(NULL_ID, NULL_pubkey, pubAK, pubLTK, dev_status1, cmw_data);
+          event ClientRA(pubAK, pubAIK, dev_status1, cmw_data);
+          event ClientRA2(pubAK, pubAIK, dev_status1);
+          event ClientRA3(pubAK, pubAIK, dev_status1, ID_C);
+          event ClientRAWithoutAK(pubAIK, dev_status1, cmw_data);
+          event ClientRANew(NULL_ID, NULL_pubkey, pubAK, pubAIK, dev_status1, cmw_data);
 
           event ClientFinished(pubLTK,pubAK,psk,cr,sr,offer,mode,kc,ks,ems,rms);
           event ClientFinishedAliveness(ID_S, pubAK);
@@ -213,7 +252,15 @@ let Client(ID_C:identity, ID_S:identity, pubAK:pubkey, pubCA:pubkey) =
           event ClientFinRecent1WayAgr(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr);
           event ClientFinRecentAgr(ID_S,ID_C,pubLTK,psk,offer,mode,kc,ks,ems,rms,cr,sr);
           event ClientFinishedWithID(ID_S,pubLTK,pubAK,psk,cr,sr,offer,mode,kc,ks,ems,rms);
-          event ClientFinishedWithBothPub(pubAK,psk,pubLTK,cr,sr,offer,mode,kc,ks,ems,rms)
+          event ClientFinishedWithBothPub(pubAK,psk,pubLTK,cr,sr,offer,mode,kc,ks,ems,rms);
+
+          (*********************************)
+          (*    POST-HANDSHAKE APP DATA    *)
+          (*********************************)
+
+          in(io, (=cr, app_msg_enc:bitstring));
+          let App_type(app_msg_s) = ph_read(app_msg_enc, ae2b(ks)) in
+          event ClientReceivesAppData(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr,pubAIK,dev_status1,app_msg_s)
         )
       )
     )
@@ -322,7 +369,8 @@ let Server(ID_S:identity, privLTK:privkey, privAK:privkey, privAIK: privkey, ID_
 
       (********************************************)
       (* Receive AuthenticatorRequest — RFC 9261 sect. 5 *)
-      in(io, AuthReq(cert_req_context));
+      in(io, auth_req_enc: bitstring);
+      let EA_type(msg2bytes(AuthReq(cert_req_context))) = ph_read(auth_req_enc, ae2b(kc)) in
       (********************************************)
 
       (* AIK [EXPAT sect. 5.2] *)
@@ -337,7 +385,8 @@ let Server(ID_S:identity, privLTK:privkey, privAK:privkey, privAIK: privkey, ID_
       let aik_pub_hash = hash(hash_algo, p2b(pubAIK)) in
 
 (*** Attesting Environment Boundary ***)
-      in(io, dev_status1:bitstring);
+      (* in(io, dev_status1:bitstring); *)
+      let dev_status1 = dev_statusRef in
       let dataSign = (rdata, aik_pub_hash, dev_status1) in
       let quote = (dataSign, sign(privAK, dataSign)) in
 (*** --- ***)
@@ -347,9 +396,9 @@ let Server(ID_S:identity, privLTK:privkey, privAK:privkey, privAIK: privkey, ID_
       event Sent(cmw_data);
       event SentWithPubLTK(cmw_data, pubLTK);
       event SentRdata(dev_status1);
-      event ServerRA(ID_S,pubLTK,pubAK,pubLTK,dev_status1,cmw_data);
-      event ServerRA2(pubAK,pubLTK,dev_status1);
-      event ServerRAWithoutAK(pubLTK,dev_status1,cmw_data);
+      event ServerRA(ID_S,pubLTK,pubAK,pubAIK,dev_status1,cmw_data);
+      event ServerRA2(pubAK,pubAIK,dev_status1);
+      event ServerRAWithoutAK(pubAIK,dev_status1,cmw_data);
 
       (* Handshake Context [RFC 9261 sect. 5.1] *)
       let handshake_context = hkdf_expand_label(ems, ea_server_handshake_context_label, zero) in
@@ -375,8 +424,16 @@ let Server(ID_S:identity, privLTK:privkey, privAK:privkey, privAIK: privkey, ID_
 
       (********************************************)
       (* Send EABundle — RFC 9261 sect. 6 *)
-      out(io, EABundle(pubAIK, cmw_data, ea_cv_sig, ea_fin_mac))
+      out(io, ph_msg(EA_type(msg2bytes(EABundle(pubAIK, cmw_data, ea_cv_sig, ea_fin_mac))), ae2b(ks)));
       (********************************************)
+
+      (*********************************)
+      (*    POST-HANDSHAKE APP DATA    *)
+      (*********************************)
+
+      new app_msg: bitstring;
+      event ServerSendsAppData(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr,pubAIK,dev_status1,app_msg);
+      out(io, (cr, ph_msg(App_type(app_msg), ae2b(ks))))
     )
   )
 ).

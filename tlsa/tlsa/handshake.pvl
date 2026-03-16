@@ -1,0 +1,281 @@
+(* 
+    Copyright 2025 Muhammad Usama Sardar, Mariam Moustafa, and Tuomas Aura.
+    Copyright 2026 Nathanael Ritz.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*)
+
+(*
+    This work is a unique adaptation and extension, developed apart from the original
+    academic model released under the Apache 2.0 license: 
+
+    https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+
+    Original TLS 1.3 library model produced by Blanchet et al. is available
+    at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
+*)
+
+(* RFC8446 Sec 4.2.8.2 *)
+fun validDH(element): bool 
+reduc forall x:bitstring;
+      validDH(dh_ideal(G, x)) = true.
+
+(* TLS 1.3 CertificateVerify context string *)
+const server_cv_context: bitstring.
+const client_cv_context: bitstring.
+
+(********************************************************)
+(* Client                                               *)
+(********************************************************)
+(* (for usability/extensibility), we can use variables for messages, 
+e.g., SH so that these variables can then be used in logs *)
+
+let Client(ID_C:identity, ID_S:identity, pubLTK:pubkey, pubAK:pubkey) =
+(
+  in(io, ioffer:params);  (* io is a public channel. ioffer is obtained from adversary as input to allow adversary to generate all valid patterns *)
+  let nego(=aTLS, DHE_13(g,eee), hash_algo, ev_type) = ioffer in
+  (* Message parsing modeled as a pattern-match with the constructors [Bhargavan2017; p. 17] *)
+
+  let (x:bitstring, gx:element) = dh_keygen(g) in
+  (* (x,gx) returned by dh_keygen for a given group g and freshly generated x; see def. above in the same file *)
+  let offer = nego(aTLS, DHE_13(g,gx), hash_algo, ev_type) in
+  (* Note that we really need DHE_13(g,gx) *)
+
+  new cr:random;  (* random nonce: ClientHello.random; 8446bis page 10 *)
+  new ar:random;  (* random nonce for attestation *)
+  let ch = CH(cr, offer, ar) in
+  let psk = NoPSK in (* non-PSK handshake, so use NoPSK to get zero. *)
+  let (es:bitstring, kb:mac_key, kc0:ae_key, ems0:bitstring) = kdf_es(psk, msg2bytes(ch)) in  (* non-PSK handshake, so use NoPSK to get zero. log1 is simply ch *)
+  (* If a given secret is not available, then the 0-value consisting of a string of Hash.length bytes set to zeros is used.
+  Note that this does not mean skipping rounds, so if PSK is not in use, Early Secret will still be HKDF-Extract(0, 0). [Section 7.1, RFC8446]  *)
+  event ClientOffersHash(cr, hash_algo); (*hash algorithm used for HKDF [Table 4 in Appendix B.4 8446bis]*)
+  event ClientOffersKEX(cr, DHE_13(g,gx));  (* supported_groups: which (EC)DHE groups client supports; and key_share extensions: (EC)DHE shares for some or all of these groups: [sec. 4.1.1. in 8446]; DH Key exchange groups [Schwenk2022 p.253] *)
+  event ClientOffersEvType(cr, ev_type);
+
+  (****************************)
+  (* send ClientHello message *)
+  out(io, ch);
+  (****************************)
+
+  (****************************)
+  (* Receive ServerHello *)
+  in(io, SH(sr, mode));
+  (****************************)
+
+  let nego(=aTLS, DHE_13(=g,gy), shash_algo, sev_type) = mode in  (* pattern matching to ensure that received mode is in the desired format and is in the same group g as sent *)
+  
+  if validDH(gy) = true then  (* RFC 8446bis sect. 4.2.8.2 *)
+  (
+    let log_SH = (ch, SH(sr, mode)) in  (* after this step, log_SH contains sent ClientHello || received ServerHello *)
+
+    let gxy = e2b(dh_exp(g, gy, x)) in  (* represents (EC)DHE in Key Derivation [Sec. 7.1, RFC8446] *)
+    let (hs:bitstring, kch:ae_key, ksh:ae_key, kcm:mac_key, ksm:mac_key) = kdf_hs(es, gxy, log_SH) in
+
+    (*******************************)
+    (* receive Certificate message *)
+    in(io, CRT(pubEK, quote, selfsign));
+    (*******************************)
+
+    let (dataSign:bitstring, sig:bitstring) = quote in  (* check quote format *)
+    let (ar_rec:random, rdata:bitstring, dev_status1:bitstring) = dataSign in  (* check dataSign format *)
+    if ar_rec = ar then  (* check attestation nonce *)
+    if verify(pubAK, dataSign, sig) = true then  (* check signatures on Quote *)
+    if dev_status1 = dev_statusRef then  (*check measurements against Ref. Values *)
+    if rdata = hash(hash_algo, p2b(pubEK)) then  (* compare hashes *)
+    (
+      (* event Appraised(log_SH); *)
+      (* event AcceptedRdata(dev_status1); *)
+      let log_CRT = (log_SH, CRT(pubEK, quote, selfsign)) in  (* after this step, log_CRT contains sent ClientHello || received ServerHello || received Certificate *)
+
+      (*************************************)
+      (* receive CertificateVerify message *)
+      in(io, CV(sg));
+      (*************************************)
+
+      if verify(pubEK, (server_cv_context, hash(shash_algo, log_CRT)), sg) = true then  (* standard CertificateVerify; pubLTK signs transcript hash *)
+      (
+        let log_CV = (log_CRT, CV(sg)) in  (* after this step, log_CV contains sent ClientHello || received ServerHello || received Certificate || received CertificateVerify *)
+        
+        event Accepted(quote);
+        event Appraised(log_SH);
+        event AcceptedRdata(dev_status1);
+        event AcceptedWithPubEK(quote, pubEK);
+
+        (*************************************************)
+        (* receive server Finished message containing hmac of log *)
+        in(io, FIN(m1));
+        (*************************************************)
+
+        if m1 = hmac(shash_algo, ksm, log_CV) then    (* hmac(hash_alg,mac_key,bitstring); mac_key = ksm using Client's perspective of log_CV; that's why client needs to generate server keys also *)
+        (
+          let log_SFIN = (log_CV, FIN(m1)) in  (* after this step, log_SFIN contains sent ClientHello || received ServerHello || received Certificate || received CertificateVerify || received server Finished *)
+          let (ms:bitstring, kc:ae_key, ks:ae_key, ems:bitstring) = kdf_ms(hs, log_SFIN) in
+          let m2 = hmac(shash_algo, kcm, log_SFIN) in  (* hmac(hash_alg,mac_key,bitstring); mac_key = kcm *)
+          let log_CFIN = (log_SFIN, FIN(m2)) in  (* after this step, log_CFIN contains sent ClientHello || received ServerHello || received Certificate || received CertificateVerify || received server Finished || sent client Finished *)
+          let rms =  kdf_psk(ms, log_CFIN) in
+          event ClientFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems, rms);
+          event ClientFinishedAliveness(ID_S);
+          event ClientFinishedWeakAgr(ID_S, ID_C);
+          event ClientFinAgr(ID_S, ID_C, pubLTK, psk, offer, mode, kc, ks, ems, rms);
+          event ClientFin1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms);
+          event ClientFinRecent1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms, cr, sr);
+          event ClientFinRecentAgr(ID_S, ID_C, pubLTK, psk, offer, mode, kc, ks, ems, rms, cr, sr);
+          event ClientFinishedWithID(ID_S, pubLTK, pubAK, psk, cr, sr, offer, mode, kc, ks, ems, rms);
+          event ClientFinishedWithBothPub(pubAK, psk, pubEK, cr, sr, offer, mode, kc, ks, ems, rms);
+          event ClientConn(quote);
+          event ClientComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_status1);
+          event ClientRA(pubAK, pubEK, dev_status1, quote);
+          event ClientRA2(pubAK, pubEK, dev_status1);
+          event ClientRA3(pubAK, pubEK, dev_status1, ID_C);
+          event ClientRAWithoutAK(pubEK, dev_status1, quote);    
+          event ClientRANew(NULL_ID, NULL_pubkey, pubAK, pubEK, dev_status1, quote);
+          event ClientID(ID_S, gxy);
+          (* insert clientSession(cr,sr,psk,offer,mode,kc,ks,ems,rms);  kc and ks are passed to appData via this table *)
+
+          (*********************************)
+          (* send ClientFinished message *)
+          out(io, FIN(m2))
+          (*********************************)
+
+
+      (* to test secrecy *)
+          (* let key = b2s(gxy) in
+          let enc_msg = sym_enc(key,mesg) in
+          out (io, enc_msg);
+          0 *)
+        )
+      )
+    )
+  )
+).
+
+(********************************************************)
+(* Server                                               *)
+(********************************************************)
+
+let Server(ID_S:identity, privLTK: privkey, privAK: privkey, privEK: privkey, ID_C:identity) =
+(
+  (********************************************************)
+  (* Receive ClientHello message from Client and store in variable ch *)
+  in(io, ch:msg);
+  (********************************************************)
+
+  let CH(cr, offer, ar) = ch in (* pattern matching to ensure that received message in variable ch is in the desired format fun CH(random,params,random):msg [data]. nonce will be stored in variable cr and parameters will be stored in variable offer. Attestation nonce will be stored in ar *)
+  let nego(=aTLS, DHE_13(g,gx), xhash_algo, xev_type) = offer in (* pattern matching to ensure that received message in variable offer is in the desired format fun nego(tls_typ,kex_alg,hash_alg,ev_typ): params [data]. *)
+  let psk = NoPSK in (* non-PSK handshake, so use NoPSK to get zero. *)
+  let (es:bitstring, kb:mac_key, kc0:ae_key, ems0:bitstring) = kdf_es(psk, msg2bytes(ch)) in  (* non-PSK handshake, so use NoPSK to get zero. log1 is simply ch *)
+
+  new sr:random; (* Server nonce used in "SH" below *)
+  (* instead of SH as input in original *)
+  in(io, smode:params);  (* io is a public channel. It is obtained from adversary as input to allow adversary to generate all valid modes *)
+  let nego(=aTLS, DHE_13(=g,eee), hash_algo, ev_type) = smode in (* check format of smode and ensure that group matches the group g as in ClientHello message *)
+
+  let (y:bitstring, gy:element) = dh_keygen(g) in
+  (* (y,gy) returned by dh_keygen for a given group g and freshly generated y; see def. above in the same file *)
+  let mode = nego(aTLS, DHE_13(g,gy), hash_algo, ev_type) in  (* Server selects a mode that fixes the group and all other session parameters [Bhargavan2017; p.16] *)
+
+  let log_SH = (ch, SH(sr, mode)) in  (* received ClientHello || sent ServerHello *)
+  event ServerChoosesKEX(cr, sr, DHE_13(g,gy));  (* DHKE group *)
+  event ServerChoosesHash(cr, sr, hash_algo);  (* hash algorithm used for HKDF/transcript hash [Table 4 in Appendix B.4 8446bis] *)
+  event ServerChoosesATLS(cr, sr, aTLS); (* Standard or Attested TLS *)
+  event ServerChoosesEvType(cr, sr, ev_type);  (* Evidence type *)
+
+  (*****************************)
+  (* Send ServerHello containing server nonce and selected mode *)
+  out(io, SH(sr, mode));
+  (*****************************)
+
+  if validDH(gx) = true then  (* RFC 8446bis sect. 4.2.8.2 *)
+  (
+    let gxy = e2b(dh_exp(g, gx, y)) in  (* represents (EC)DHE in Key Derivation [Sec. 7.1, RFC8446] *)
+    let (hs:bitstring, kch:ae_key, ksh:ae_key, kcm:mac_key, ksm:mac_key) = kdf_hs(es, gxy, log_SH) in
+
+    let pubEK = pk(privEK) in
+    let pubLTK = pk(privLTK) in
+    let pubAK = pk(privAK) in
+    event ServerID(ID_S, gxy);
+
+    (* Evidence generation *)
+    let rdata = hash(StrongHash, p2b(pubEK)) in (* rdata = hash(pubEK) *)
+
+(*** Attesting Environment Boundary ***)
+    (* model of dev_status (measurements): input from adversary *)
+    (* Lets the adversary instantiate any desired VM 
+        but only the one with correct measurements will be accepted at Verifier *)
+    (* Alternative model: generate using new, give to adversary and use tables to store *)
+    in(io, dev_status1: bitstring);
+    let dataSign = (ar, rdata, dev_status1) in
+    let quote = (dataSign, sign(privAK, dataSign)) in
+    let selfsign = sign(privEK, (pubEK, quote)) in
+(*** --- ***)
+
+    event Conveyed(log_SH);
+    event Sent(quote);
+    event SentWithPubEK(quote, pubEK);
+    event SentRdata(dev_status1);
+    event ServerRA(ID_S, pubLTK, pubAK, pubEK, dev_status1, quote);  
+    event ServerRA2(pubAK, pubEK, dev_status1);
+    event ServerRAWithoutAK(pubEK, dev_status1, quote);
+
+    (*****************************)
+    (* Send Certificate message *)
+    out(io, CRT(pubEK, quote, selfsign));
+    (*****************************)
+
+    let log_CRT = (log_SH, CRT(pubEK, quote, selfsign)) in  (* received ClientHello || sent ServerHello || sent Certificate *)
+
+    (* CertificateVerify — RFC 8446 sect. 4.4.3;
+       privEK signs Transcript-Hash(Handshake Context, Certificate) *)
+    let sg = sign(privEK, (server_cv_context, hash(hash_algo, log_CRT))) in
+
+    (*****************************)
+    (* Send CertificateVerify — RFC 8446 sect. 4.4.3 *)
+    out(io, CV(sg));
+    (*****************************)
+
+    let log_CV = (log_CRT, CV(sg)) in  (* received ClientHello || sent ServerHello || sent Certificate || sent CertificateVerify *)
+
+    (* serverFinished message *)
+    let m1 = hmac(StrongHash, ksm, log_CV) in  (* A MAC over the value Transcript-Hash(Handshake Context, Certificate, CertificateVerify) using a MAC key derived from the Base Key [Sec. 4.4, RFC8446]. Handshake Context via first row of table in Sec. 4.4 of RFC8446. log_CV contains Handshake Context, Certificate, CertificateVerify  *)
+    let log_SFIN = (log_CV, FIN(m1)) in  (* received ClientHello || sent ServerHello || sent Certificate || sent CertificateVerify || sent ServerFinished *)
+    let (ms:bitstring, kc:ae_key, ks:ae_key, ems:bitstring) = kdf_ms(hs, log_SFIN) in  (* Key Derivation [Sec. 7.1, RFC8446] *)
+    event PreServerFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems);
+    event PreServerFinishedAliveness(ID_S);
+    event PreServerFinishedWeakAgr(ID_S, ID_C);
+    event PreServerFin1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems);
+    event PreServerFinRecent1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, cr, sr);  
+    event PreServerFinAgr(ID_S, ID_C, pubLTK, psk, offer, mode, kc, ks, ems);
+    event PreServerFinRecentAgr(ID_S, ID_C, pubLTK, psk, offer, mode, kc, ks, ems, cr, sr);
+    event PreServerFinishedWithID(ID_S, pubLTK, pubAK, psk, cr, sr, offer, mode, kc, ks, ems);
+    event PreServerFinishedWithBothPub(pubAK, psk, pubEK, cr, sr, offer, mode, kc, ks, ems);
+    event PreServerComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, cr, sr, pubEK, dev_status1);  
+
+    (*****************************)
+    (* Send serverFinished message *)
+    out(io, FIN(m1));
+    (*****************************)
+
+    (**********************************)
+    (* Receive client Finished message *)
+    in(io, FIN(m2));
+    (**********************************)
+
+    if m2 = hmac(StrongHash, kcm, log_SFIN) then  (* kcm represents kcm; check mac of finished from client *)
+    (
+      let log_CFIN = (log_SFIN, FIN(m2)) in  (* received ClientHello || sent ServerHello || sent Certificate || sent CertificateVerify || sent ServerFinished || received ClientFinished *)
+      let rms =  kdf_psk(ms, log_CFIN) in
+      event ServerFinished(cr, sr, psk, pubLTK, offer, mode, kc, ks, ems, rms)
+      (* insert serverSession(cr,sr,psk,offer,mode,kc,ks,ems,rms);  kc and ks are passed to appData via this table *)
+    )
+  )
+).

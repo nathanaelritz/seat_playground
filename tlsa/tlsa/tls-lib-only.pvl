@@ -162,23 +162,17 @@ const NULL_bs:bitstring.
 (********************************************************)
 (* LAK *)
 (********************************************************)
-(*    LeakAK(ID,      pubLTK,pubAK  ) *)
-event LeakAK(identity,pubkey,pubkey).
+(*    LeakAK(ID,      pubLTK,pubAK ,pubEK) *)
+event LeakAK(identity,pubkey,pubkey,pubkey).
 (*    LeakedAK(pubAK) *)
 event LeakedAK(pubkey).
-event LeakedAK2(identity,pubkey,pubkey).
+event LeakedAK2(identity,pubkey,pubkey,pubkey).
 
 (********************************************************)
-(* LTIK *)
+(* LEK *)
 (********************************************************)
 event LeakEK.
 event LeakedEK(pubkey).
-
-(********************************************************)
-(* LTIK *)
-(********************************************************)
-event LeakTIK.
-event LeakedTIK(pubkey).
 
 (********************************************************)
 (* LLTK *)
@@ -292,7 +286,7 @@ fun nego(tls_typ,kex_alg,hash_alg,ev_typ): params [data].
 fun CH(random,params,random):msg [data].  (* ClientHello *)
 fun SH(random,params):msg [data].  (* ServerHello *)
 (* EncryptedExtensions msg not modelled *)
-(*  CRT(pubLTK ,quote    ,selfsign ) *)
+(*  CRT(pubEK ,quote    ,selfsign ) *)
 fun CRT(pubkey,bitstring,bitstring):msg [data].  (* Certificate message of TLS *)
 fun CV(bitstring):msg [data].  (* CertificateVerify *)
 fun CV_Ext(bitstring,bitstring):msg [data].  (* Extended CertificateVerify *)
@@ -304,14 +298,14 @@ fun FIN(bitstring):msg [data].  (* Finished *)
 event test4.
 
 event Sent(bitstring).
-event SentWithPubLTK(bitstring,pubkey).
-event Accepted(bitstring,pubkey).
-event AcceptedWithPubLTK(bitstring,pubkey,pubkey).
+event SentWithPubEK(bitstring,pubkey).
+event Accepted(bitstring).
+event AcceptedWithPubEK(bitstring,pubkey).
 event SentRdata(bitstring).
-event AcceptedRdata(bitstring,pubkey).
+event AcceptedRdata(bitstring).
 event Conveyed(bitstring).
 event Appraised(bitstring).
-event ClientConn(bitstring,pubkey).
+event ClientConn(bitstring).
 
 event ClientOffersHash(random,hash_alg).
 event ClientOffersKEX(random,kex_alg).
@@ -319,20 +313,19 @@ event ClientOffersEvType(random,ev_typ).
 (* Old: ClientFinished(cr,sr,psk,pubLTK,offer,mode,kc,ks,ems,rms) *)
 (* New: ClientFinishedeWithID(ID,pubLTK,pubAK,psk,cr,sr,offer,mode,kc,ks,ems,rms) *)
 event ClientFinished(pubkey,
-  pubkey,
   preSharedKey,
   random,random,
   params,params,
   ae_key,ae_key,bitstring,bitstring).
-event ClientFinishedAliveness(identity, pubkey). (* ID_S, pubAK *)
-(* ClientFin1WayAgr(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms) *)
+event ClientFinishedAliveness(identity). (* ID_S *)
+(* ClientFin1WayAgr(ID_S,pubLTK,psk,offer,mode,kc,ks,ems,rms) *)
 event ClientFin1WayAgr(identity,
-      pubkey,pubkey,preSharedKey,
+      pubkey,preSharedKey,
       params,params,
       ae_key,ae_key,bitstring,bitstring).
-(* ClientFinRecent1WayAgr(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr) *)
+(* ClientFinRecent1WayAgr(ID_S,pubLTK,psk,offer,mode,kc,ks,ems,rms,cr,sr) *)
 event ClientFinRecent1WayAgr(identity,
-      pubkey,pubkey,preSharedKey,
+      pubkey,preSharedKey,
       params,params,
       ae_key,ae_key,bitstring,bitstring,
       random,random).
@@ -353,7 +346,7 @@ event ClientFinishedWithID(identity,pubkey,pubkey,
   random,random,
   params,params,
   ae_key,ae_key,bitstring,bitstring).
-(* New: ClientFinishedWithBothPub(pubAK,psk,pubLTK,cr,sr,offer,mode,kc,ks,ems,rms) *)  
+(* New: ClientFinishedWithBothPub(pubAK,psk,pubEK,cr,sr,offer,mode,kc,ks,ems,rms) *)  
 event ClientFinishedWithBothPub(pubkey,preSharedKey,
   pubkey,
   random,random,
@@ -361,18 +354,18 @@ event ClientFinishedWithBothPub(pubkey,preSharedKey,
   ae_key,ae_key,bitstring,bitstring).
 
 (* ClientComp represents a composition event with parameters from both RA and TLS *)
-(* ClientComp(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,rms,cr,sr,pubLTK,dev_state) *)
+(* ClientComp(ID_S,pubLTK,psk,offer,mode,kc,ks,ems,rms,cr,sr,pubEK,dev_state) *)
 event ClientComp(identity,
-      pubkey,pubkey,preSharedKey,
+      pubkey,preSharedKey,
       params,params,
       ae_key,ae_key,bitstring,bitstring,
       random,random,
       pubkey,bitstring).
-(* ClientRA is for explicit agreement of all RA parameters: (pubAK,pubLTK,dev_state,ev) *)
+(* ClientRA is for explicit agreement of all RA parameters: (pubAK,pubEK,dev_state,ev) *)
 event ClientRA(pubkey,pubkey,bitstring,bitstring).
 event ClientRA2(pubkey,pubkey,bitstring).
 event ClientRA3(pubkey,pubkey,bitstring,identity).
-event ClientRANew(identity,pubkey,pubkey,pubkey,bitstring,bitstring). (* ID,pubLTK,pubAK,pubLTK,dev_state,ev *)
+event ClientRANew(identity,pubkey,pubkey,pubkey,bitstring,bitstring). (* ID,pubLTK,pubAK,pubEK,dev_state,ev *)
 event ClientRAWithoutAK(pubkey,bitstring,bitstring).
 
 event ServerChoosesHash(random,random,hash_alg).
@@ -382,20 +375,19 @@ event ServerChoosesATLS(random,random,tls_typ).
 (* Old: PreServerFinished(cr,sr,psk,pubLTK,offer,mode,kc,ks,ems) *)
 (* New: PreServerFinishedWithID(ID,pubLTK,pubAK,psk,cr,sr,offer,mode,kc,ks,ems) *)
 event PreServerFinished(pubkey,
-            pubkey,
             preSharedKey,
       random,random,
             params,params,
             ae_key,ae_key,bitstring).
-event PreServerFinishedAliveness(identity, pubkey). (* ID_S, pubAK *)
-(* PreServerFin1WayAgr(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems) *)
+event PreServerFinishedAliveness(identity). (* ID_S *)
+(* PreServerFin1WayAgr(ID_S,pubLTK,psk,offer,mode,kc,ks,ems) *)
 event PreServerFin1WayAgr(identity,
-      pubkey,pubkey,preSharedKey,
+      pubkey,preSharedKey,
       params,params,
       ae_key,ae_key,bitstring).
-(* PreServerFinRecent1WayAgr(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,cr,sr) *)
+(* PreServerFinRecent1WayAgr(ID_S,pubLTK,psk,offer,mode,kc,ks,ems,cr,sr) *)
 event PreServerFinRecent1WayAgr(identity,
-      pubkey,pubkey,preSharedKey,
+      pubkey,preSharedKey,
       params,params,
       ae_key,ae_key,bitstring,
       random,random).
@@ -416,21 +408,21 @@ event PreServerFinishedWithID(identity,pubkey,pubkey,
       random,random,
             params,params,
             ae_key,ae_key,bitstring).
-(* New: PreServerFinishedWithBothPub(pubAK,psk,pubLTK,cr,sr,offer,mode,kc,ks,ems) *)
+(* New: PreServerFinishedWithBothPub(pubAK,psk,pubEK,cr,sr,offer,mode,kc,ks,ems) *)
 event PreServerFinishedWithBothPub(pubkey,preSharedKey,
       pubkey,
       random,random,
             params,params,
             ae_key,ae_key,bitstring).
 (* PreServerComp represents a composition event with parameters from both RA and TLS *)
-(* PreServerComp(ID_S,pubLTK,pubAK,psk,offer,mode,kc,ks,ems,cr,sr,pubLTK,dev_state) *)
+(* PreServerComp(ID_S,pubLTK,psk,offer,mode,kc,ks,ems,cr,sr,pubEK,dev_state) *)
 event PreServerComp(identity,
-      pubkey,pubkey,preSharedKey,
+      pubkey,preSharedKey,
       params,params,
       ae_key,ae_key,bitstring,
       random,random,
       pubkey,bitstring).
-(* ServerRA is for explicit agreement of all RA parameters: (ID,pubLTK,pubAK,pubLTK,dev_state,ev) *)
+(* ServerRA is for explicit agreement of all RA parameters: (ID,pubLTK,pubAK,pubEK,dev_state,ev) *)
 event ServerRA(identity,pubkey,pubkey,pubkey,bitstring,bitstring).
 event ServerRA2(pubkey,pubkey,bitstring).
 event ServerRAWithoutAK(pubkey,bitstring,bitstring).
