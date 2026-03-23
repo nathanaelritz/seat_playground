@@ -1,0 +1,751 @@
+(* 
+Copyright 2025 Muhammad Usama Sardar, Mariam Moustafa, and Tuomas Aura.
+Copyright 2026 Nathanael Ritz.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*)
+
+(*
+This work is a unique adaptation and extension, developed apart from the original
+academic model released under the Apache 2.0 license: 
+
+https://github.com/CCC-Attestation/formal-spec-id-crisis/tree/main
+
+Original TLS 1.3 library model produced by Blanchet et al. is available
+at: https://github.com/Inria-Prosecco/reftls/blob/master/pv/tls-lib.pvl
+*)
+
+(*
+   Step-wise correspondence proof of relay attacks on intra-handshake
+   attestation with pubEK binding (Mechanism #4).
+   Model: tls-lib-simple.pvl
+   
+   NOTE: This file targets the FLAWED protocol in which rdata is computed
+   as hash(pubEK, ar), binding Evidence only to the Endorsement Key and
+   the client attestation nonce. The handshake transcript (log_SH), the
+   server identity (pubLTK), and the DH shares are entirely absent from
+   rdata. This decoupling is the root cause of all failures below.
+   
+   Consequence: the DH trapdoor that closes the relay path in the robust
+   protocol does not exist here. An attacker who injects their own DH
+   share (gy_A) and controls privEK_A can compute gxy and forge valid
+   FIN MACs regardless of whether the Evidence is session-bound. The
+   Frankenstein stitching attack — forge a Quote over (pubEK_A, ar) with
+   only privAK, stitch it to the real server_cert, sign CV with privEK_A
+   — passes every checkpoint and reaches application data with no
+   compromise of privLTK or privEK.
+   
+   The phase-structured queries in Part C establish this directly.
+   The uniform FALSE result across all nine queries is the result.
+ *)
+
+(* ================================================================== *)
+(* PART A: DH IDENTITY                                                *)
+(* The relay operates at the DH layer before attestation is involved. *)
+(* ================================================================== *)
+
+(* A1 — EXPECTED FALSE
+   Adversary relays gx to genuine server, receives gy, derives gxy,
+   presents this to the RP without genuine server involvement.
+   The inj- qualifier additionally rules out reusing a single server
+   DH session across multiple RP sessions. 
+*)
+query ID_S: identity, gxy: bitstring;
+    inj-event(ClientID(ID_S, gxy))
+    ==> inj-event(ServerID(ID_S, gxy)).
+
+
+(* ================================================================== *)
+(* PART B: BINDING LEVEL ANALYSIS                                     *)
+(* ================================================================== *)
+
+
+(* B1 non-injective bare — EXPECTED FALSE
+   Weakest possible Level 2 claim: does accepted Evidence come from a
+   server that conveyed at the same log_SH? 
+*)
+query log: bitstring;
+    event(Appraised(log))
+    ==> event(Conveyed(log)).
+
+(* B2 injective bare — EXPECTED FALSE
+   Each Evidence acceptance traces to a distinct conveyance at the
+   same transcript state. Fails for the same reason as B1, and
+   additionally rules out Evidence replay across sessions. 
+*)
+query log: bitstring;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log)).
+
+(* B3 injective + all escapes — EXPECTED TRUE
+   Minimal escape set that repairs Level 2 binding. Either key
+   compromise allows production or relay of Evidence satisfying the
+   client's appraisal at an arbitrary log_SH. 
+*)
+query log: bitstring,
+      pubAK: pubkey, pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* B4 injective + LeakedEK only — EXPECTED FALSE
+   AK forgery path exists independently of EK relay and produces an
+   Appraised event with no matching Conveyed. Consistent with E3 FALSE. 
+*)
+query log: bitstring,
+      pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedEK(pubEK)).
+
+(* B5 injective + LeakedAK only — EXPECTED FALSE
+ * EK relay path exists independently. Consistent with E4 FALSE. *)
+query log: bitstring,
+      pubAK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK)).
+
+(* B6 non-injective bare, Level 3 — EXPECTED FALSE
+   Does the server that produced Evidence(pubEK) agree on (kc,ks)
+   with the client that accepted it? 
+*)
+query pubEK: pubkey, psk: preSharedKey, cr: random, sr: random,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring;
+    event(ClientFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems, rms))
+    ==> event(PreServerFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems)).
+
+(* B7 injective + weak-crypto escapes only, Level 3 — EXPECTED FALSE
+ * Attack uses strong cryptography. WeakDH/WeakHash/BadElement not involved. *)
+query pubEK: pubkey, psk: preSharedKey, cr: random, sr: random,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems, rms))
+    ==> inj-event(PreServerFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement).
+
+(* B8 injective + LeakedEK only, Level 3 — EXPECTED FALSE
+ * Consistent with E3 FALSE. *)
+query pubEK: pubkey, psk: preSharedKey, cr: random, sr: random,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems, rms))
+    ==> inj-event(PreServerFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedEK(pubEK)).
+
+(* B9 injective + LeakedAK only, Level 3 — EXPECTED FALSE
+ * Consistent with E4 FALSE. *)
+query pubEK: pubkey, psk: preSharedKey, cr: random, sr: random,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      pubAK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems, rms))
+    ==> inj-event(PreServerFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK)).
+
+(* B10 injective + both, Level 3 — EXPECTED TRUE *)
+query pubEK: pubkey, psk: preSharedKey, cr: random, sr: random,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      pubAK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems, rms))
+    ==> inj-event(PreServerFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* B11 injective + both + full identity, Level 3 — EXPECTED TRUE
+   ClientFinishedWithID binds ID_S and pubLTK alongside pubAK and kc,ks.
+   Closes the Level 3 sequence with the most parameter-rich event. 
+*)
+query ID: identity, pubLTK: pubkey, pubAK: pubkey, pubEK: pubkey,
+      psk: preSharedKey, cr: random, sr: random,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr': random, sr': random, badEl: element;
+    inj-event(ClientFinishedWithID(ID, pubLTK, pubAK, psk, cr, sr,
+                                   offer, mode, kc, ks, ems, rms))
+    ==> inj-event(PreServerFinishedWithID(ID, pubLTK, pubAK, psk, cr, sr,
+                                          offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+
+(* ================================================================== 
+   PART C: PHASE-STRUCTURED ATTACK SURFACE ANALYSIS                 
+                                                                      
+   Three phases, three queries each. Each phase asks whether a        
+   genuine server participated in the session at a progressively      
+   deeper protocol checkpoint.                                        
+                                                                      
+   ALL NINE QUERIES ARE EXPECTED FALSE against this protocol.         
+                                                                      
+   The result is uniform — not step-wise — because rdata is computed  
+   as hash(pubEK, ar) with no log_SH component. The DH trapdoor that  
+   would close the relay path at Phase 2 in the robust protocol does  
+   not exist here. An attacker who injects their own gy_A controls    
+   gxy throughout and can forge FIN MACs at every checkpoint.         
+                                                                      
+   Phase 1 has two independent attack paths:                          
+     Path A — AK forgery: attacker uses privAK to sign a Quote over   
+       their own (pubEK_A, ar). No LTK or EK compromise needed.       
+     Path B — EK relay: attacker forwards ar to the genuine TEE,      
+       relays the resulting Quote, signs CV with their own privEK.    
+       No AK compromise needed.                                       
+                                                                      
+   Phase 2 and Phase 3: Path A (Frankenstein stitching) survives      
+   both because the attacker controls gxy from the injected gy_A.     
+   Path B may or may not survive depending on relay completeness, but 
+   Path A alone is sufficient to make every .2 and .3 query FALSE.    
+  ================================================================== *)
+
+(* ------------------------------------------------------------------ 
+   PHASE 1: EVIDENCE ORIGIN & TRANSCRIPT BINDING (log_SH)           
+   ------------------------------------------------------------------                                                          
+   Checkpoint: ClientAppraisedQuote / ServerSentQuote.                
+   The client has verified the AK signature over dataSign and the     
+   CV signature over log_CRT. Security at this layer would require    
+   both signatures to bind to the specific session. In this protocol  
+   rdata = hash(pubEK, ar) — log_SH is absent. The AK signature      
+   binds only pubEK and ar; it does not commit to the DH shares or    
+   the server identity in the transcript. CV binds to log_CRT which   
+   includes log_SH, but the attacker constructs log_CRT themselves    
+   by injecting pubEK_A into CRT, so CV is signed with privEK_A over  
+   a transcript the attacker controls.                                
+   ------------------------------------------------------------------ *)
+
+(* C1.1 — EXPECTED FALSE
+   Bare correspondence. Both attack paths are present: the AK forgery
+   path (privAK alone, injecting pubEK_A and gy_A) and the EK relay
+   path (genuine TEE quote relayed with attacker-controlled privEK).
+   Neither requires a matching ServerSentQuote in the genuine server's
+   session. 
+*)
+query ID_S: identity, pubLTK: pubkey, pubAK: pubkey, pubEK: pubkey,
+      psk: preSharedKey, cr: random, sr: random, offer: params, mode: params,
+      kch: ae_key, ksh: ae_key, dev_state: bitstring, quote: bitstring;
+    inj-event(ClientAppraisedQuote(ID_S, pubLTK, pubAK, pubEK, psk, cr, sr, offer, mode, kch, ksh, dev_state, quote))
+    ==> inj-event(ServerSentQuote(ID_S, pubLTK, pubAK, pubEK, psk, cr, sr, offer, mode, kch, ksh, dev_state, quote)).
+
+(* C1.2 — EXPECTED FALSE
+   RHS disjunct: LeakedAK.
+   LeakedAK covers Path A (AK forgery) but Path B (EK relay) exists
+   independently. The relay attacker forwards ar to the genuine TEE and
+   signs CV with their own privEK. privAK is never touched. ProVerif
+   finds the relay trace with no LeakedAK firing. 
+*)
+query ID_S: identity, pubLTK: pubkey, pubAK: pubkey, pubEK: pubkey,
+      psk: preSharedKey, cr: random, sr: random, offer: params, mode: params,
+      kch: ae_key, ksh: ae_key, dev_state: bitstring, quote: bitstring,
+      cr': random, sr': random, badEl: element;
+    inj-event(ClientAppraisedQuote(ID_S, pubLTK, pubAK, pubEK, psk, cr, sr, offer, mode, kch, ksh, dev_state, quote))
+    ==> inj-event(ServerSentQuote(ID_S, pubLTK, pubAK, pubEK, psk, cr, sr, offer, mode, kch, ksh, dev_state, quote))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK)).
+
+(* C1.3 — EXPECTED FALSE
+   RHS disjuncts: LeakedLTK || LeakedEK.
+   LeakedLTK+LeakedEK covers Path B (EK relay) but Path A (AK forgery)
+   exists independently. The Frankenstein attacker uses only privAK —
+   they generate their own (privEK_A, pubEK_A), sign the Quote with
+   privAK over (pubEK_A, ar), stitch it to the genuine server_cert, and
+   sign CV with privEK_A. Neither privLTK nor the genuine privEK is ever
+   needed. ProVerif finds this trace with no LeakedLTK or LeakedEK
+   firing.
+   
+   This is the decisive contrast with the robust protocol, where Q1.3
+   is TRUE because s_attest_binder = hash(hash(log_SH || label) ||
+   (pubEK, pubLTK)) makes the relay path detectable via LeakedEK.
+   Here there is no session binding and no such detection. 
+*)
+query ID_S: identity, pubLTK: pubkey, pubAK: pubkey, pubEK: pubkey,
+      psk: preSharedKey, cr: random, sr: random, offer: params, mode: params,
+      kch: ae_key, ksh: ae_key, dev_state: bitstring, quote: bitstring,
+      cr': random, sr': random, badEl: element;
+    inj-event(ClientAppraisedQuote(ID_S, pubLTK, pubAK, pubEK, psk, cr, sr, offer, mode, kch, ksh, dev_state, quote))
+    ==> inj-event(ServerSentQuote(ID_S, pubLTK, pubAK, pubEK, psk, cr, sr, offer, mode, kch, ksh, dev_state, quote))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedEK(pubEK)).
+
+
+(* ------------------------------------------------------------------
+   PHASE 2: FULL SESSION COMPOSITION (log_SFIN)    
+   ------------------------------------------------------------------                 
+                                                                     
+   Checkpoint: ClientComp / PreServerComp.                           
+   In the robust protocol the FIN MAC is keyed from gxy, and the     
+   session binder ties gxy to the specific Quote. An attacker who    
+   injected their own gy_A cannot recover the genuine gxy without    
+   invalidating the Quote. The relay path dies here.                 
+                                                                     
+   In this protocol rdata = hash(pubEK, ar). The Quote is not bound  
+   to log_SH or to any specific gxy. The Frankenstein attacker       
+   injected gy_A and therefore knows gxy = DH(gx, y_A). They can     
+   compute the FIN MAC directly. No trapdoor exists.                 
+                                                                     
+   Phase transition Q1.2 → Q2.2 that would read FALSE → TRUE in the  
+   robust protocol reads FALSE → FALSE here. The DH commitment to    
+   s_attest_binder is absent and the relay path is never closed.     
+ ------------------------------------------------------------------ *)
+
+(* C2.1 — EXPECTED FALSE
+   Bare correspondence. The Frankenstein attacker (Path A, privAK only)
+   and the EK relay attacker (Path B) both survive to the composition
+   checkpoint. Neither path requires a genuine PreServerComp event. 
+*)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey, offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring, cr: random, sr: random,
+      pubEK: pubkey, dev_state: bitstring;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, cr, sr, pubEK, dev_state)).
+
+(* C2.2 — EXPECTED FALSE
+   RHS disjunct: LeakedAK.
+   In the robust protocol this query is TRUE because the DH trapdoor
+   kills the EK relay path, leaving only the AK forgery path which
+   LeakedAK covers. Here the trapdoor is absent. Path B (EK relay)
+   still reaches this checkpoint without touching privAK, so ProVerif
+   finds a trace with no LeakedAK firing.
+*)
+query ID_S: identity, pubLTK: pubkey, pubAK: pubkey, psk: preSharedKey, offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring, cr: random, sr: random,
+      pubEK: pubkey, dev_state: bitstring, cr': random, sr': random, badEl: element;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, cr, sr, pubEK, dev_state))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl))) || event(ServerChoosesHash(cr', sr', WeakHash)) || event(SentBadElement)
+     || event(LeakedAK(pubAK)).
+
+(* C2.3 — EXPECTED FALSE
+   RHS disjuncts: LeakedLTK + LeakedEK.
+   In the robust protocol this query is TRUE because privLTK is required
+   to forge ekExt for a controlled pubEK_2, and the session binder ties
+   the Quote to a specific log_SH that privEK_2 must then sign over.
+   Here neither constraint applies. The Frankenstein attacker uses only
+   privAK: rdata = hash(pubEK_A, ar) requires no LTK, ekExt does not
+   exist in this protocol, and CV is signed over log_CRT which the
+   attacker constructed themselves using pubEK_A. Neither LeakedLTK nor
+   LeakedEK fires. ProVerif finds this Path A trace. 
+*)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey, offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring, cr: random, sr: random,
+      pubEK: pubkey, dev_state: bitstring, cr': random, sr': random, badEl: element;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, cr, sr, pubEK, dev_state))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl))) || event(ServerChoosesHash(cr', sr', WeakHash)) || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedEK(pubEK)).
+
+
+(* ------------------------------------------------------------------
+   PHASE 3: END-TO-END APPLICATION DATA                              
+   ------------------------------------------------------------------                                                                  
+   Checkpoint: ClientReceivesAppData / ServerSendsAppData.           
+   Application keys kc/ks are derived from gxy and log_SFIN. In the  
+   robust protocol only controlled-session paths survive Phase 2 and 
+   reach this layer; the relay attacker crashes at the FIN MACs.     
+                                                                     
+   In this protocol the Frankenstein attacker controls gxy throughout
+   and derives matching kc/ks. They reach application data delivery. 
+   The result pattern at Phase 3 is identical to Phase 2: both paths 
+   survive, neither escape set is sufficient.                        
+------------------------------------------------------------------ *)
+
+(* C3.1 — EXPECTED FALSE
+   Bare correspondence. The Frankenstein attacker decrypts and injects
+   application data under the kc/ks they derived from their own gxy.
+   No genuine ServerSendsAppData event fires in the real server's
+   session. 
+*)
+query ID_S: identity, pubEK: pubkey, pubAK: pubkey, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params, kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, dev_state: bitstring, app_data: bitstring;
+    event(ClientReceivesAppData(ID_S, pubEK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubLTK, dev_state, app_data))
+    ==> event(ServerSendsAppData(ID_S, pubEK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubLTK, dev_state, app_data)).
+
+(* C3.2 — EXPECTED FALSE
+   RHS disjunct: LeakedAK.
+   Consistent with Q2.2 FALSE. Path B (EK relay) reaches application
+   data delivery without touching privAK. LeakedAK is not a sufficient
+   escape set at any layer in this protocol. 
+*)
+query ID_S: identity, pubEK: pubkey, pubAK: pubkey, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params, kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, dev_state: bitstring, app_data: bitstring, cr': random, sr': random, badEl: element;
+    event(ClientReceivesAppData(ID_S, pubEK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubLTK, dev_state, app_data))
+    ==> event(ServerSendsAppData(ID_S, pubEK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubLTK, dev_state, app_data))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl))) || event(ServerChoosesHash(cr', sr', WeakHash)) || event(SentBadElement)
+     || event(LeakedAK(pubAK)).
+
+(* C3.3 — EXPECTED FALSE
+   RHS disjuncts: LeakedLTK + LeakedEK.
+   Consistent with Q2.3 FALSE. The Frankenstein stitching attack
+   reaches application data delivery with only privAK compromised.
+   The client accepted the malicious CRT (genuine server_cert stitched
+   to pubEK_A and the forged Quote), accepted CV signed by privEK_A,
+   and derived kc/ks from gxy = DH(gx, y_A). The genuine privLTK and
+   privEK are completely bypassed. LeakedLTK + LeakedEK is not a
+   sufficient escape set because the attack requires neither.
+   
+   This is the definitive failure of the protocol: the security
+   property that the robust protocol achieves (LeakedLTK+LeakedEK
+   as an independent sufficient escape set at every layer) does not
+   exist here. There is no second root of trust. 
+*)
+query ID_S: identity, pubEK: pubkey, pubAK: pubkey, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params, kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, dev_state: bitstring, app_data: bitstring, cr': random, sr': random, badEl: element;
+    event(ClientReceivesAppData(ID_S, pubEK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubLTK, dev_state, app_data))
+    ==> event(ServerSendsAppData(ID_S, pubEK, pubAK, psk, offer, mode, kc, ks, ems, rms, cr, sr, pubLTK, dev_state, app_data))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl))) || event(ServerChoosesHash(cr', sr', WeakHash)) || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedEK(pubEK)).
+
+
+(* ================================================================== *)
+(* PART D: ONE-WAY AGREEMENT BASELINE                                 *)
+(* ================================================================== *)
+
+(* D1 — EXPECTED TRUE *)
+query ID_S: identity, pubAK: pubkey, pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    event(ClientFinishedAliveness(ID_S))
+    ==> event(PreServerFinishedAliveness(ID_S))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* D2 non-injective — EXPECTED TRUE *)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      pubAK: pubkey, pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    event(ClientFin1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms))
+    ==> event(PreServerFin1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* D3 injective — EXPECTED TRUE *)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      pubAK: pubkey, pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientFin1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems, rms))
+    ==> inj-event(PreServerFin1WayAgr(ID_S, pubLTK, psk, offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* D4 injective with nonces — EXPECTED TRUE *)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random,
+      pubAK: pubkey, pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientFinRecent1WayAgr(ID_S, pubLTK, psk, offer, mode,
+                                     kc, ks, ems, rms, cr, sr))
+    ==> inj-event(PreServerFinRecent1WayAgr(ID_S, pubLTK, psk, offer, mode,
+                                            kc, ks, ems, cr, sr))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* ==================================================================  *)
+(* PART E: PROGRESSIVE COMPOSITION BINDING ANALYSIS                    *)
+(* ClientComp and PreServerComp carry parameters from both RA and TLS. *)
+(* ==================================================================  *)
+
+(* E1 bare — EXPECTED FALSE *)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, pubEK: pubkey, dev_state: bitstring;
+    event(ClientComp(ID_S, pubLTK, psk, offer, mode,
+                     kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> event(PreServerComp(ID_S, pubLTK, psk, offer, mode,
+                            kc, ks, ems, cr, sr, pubEK, dev_state)).
+
+(* E2 injective + both — EXPECTED TRUE
+   Every attack trace uses at least one of the two key compromises.
+   With D3 FALSE and D4 FALSE in the original model: single compromise
+   of either key is sufficient for a complete relay attack. Note that
+   in the flawed protocol the BEV phase queries (Q2.2, Q2.3) establish
+   that neither key alone nor the LTK+EK pair is sufficient — D5 TRUE
+   here means the union {AK, EK} covers all traces, but that union
+   masks the independent path structure that the BEV queries expose. 
+*)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, pubEK: pubkey, dev_state: bitstring,
+      pubAK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode,
+                         kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode,
+                                kc, ks, ems, cr, sr, pubEK, dev_state))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+
+(* ================================================================== *)
+(* PART F: LTK assumption ANALYSIS                                  *)
+(* ================================================================== *)
+
+(* F1: LeakedLTK alone at Level 2 — EXPECTED FALSE
+ * LTK does not appear in any verification path for Evidence appraisal. *)
+query log: bitstring,
+      pubLTK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK)).
+
+(* F2: LeakedLTK + LeakedAK at Level 2 — EXPECTED FALSE
+ * AK alone is already sufficient (B5 FALSE). LTK adds nothing. *)
+query log: bitstring,
+      pubLTK: pubkey, pubAK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedAK(pubAK)).
+
+(* F3: LeakedLTK + LeakedEK at Level 2 — EXPECTED FALSE
+   EK alone is already sufficient (B4 FALSE). LTK adds nothing.
+   After modifying CV to use privLTK, this should become TRUE:
+   the EK relay path would then require both privEK and privLTK,
+   meaning LeakedEK alone would no longer be sufficient. 
+*)
+query log: bitstring,
+      pubLTK: pubkey, pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedEK(pubEK)).
+
+(* F4: LeakedLTK + LeakedAK + LeakedEK at Level 2 — EXPECTED TRUE
+   Adding LeakedLTK to the escape set of B3 (LeakedAK + LeakedEK,
+   already TRUE) cannot narrow the result. LTK remains structurally
+   inert at this layer — the TRUE result is
+   entirely carried by the LeakedAK disjuncts 
+*)
+query log: bitstring,
+      pubLTK: pubkey, pubAK: pubkey, pubEK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(Appraised(log))
+    ==> inj-event(Conveyed(log))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* F5: LeakedLTK alone at Level 3 (ClientFinished / atsc) — EXPECTED FALSE
+ * LTK does not appear in the kdf_ms derivation path. *)
+query pubEK: pubkey, psk: preSharedKey, cr: random, sr: random,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      pubLTK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems, rms))
+    ==> inj-event(PreServerFinished(pubEK, psk, cr, sr, offer, mode, kc, ks, ems))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK)).
+
+
+(* ------------------------------------------------------------------ *)
+(* G1-G10: LTK at the composition layer (ClientComp / PreServerComp)  *)
+(* ------------------------------------------------------------------ *)
+
+(* G1: LeakedLTK alone at composition — EXPECTED FALSE *)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, pubEK: pubkey, dev_state: bitstring,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode,
+                         kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode,
+                                kc, ks, ems, cr, sr, pubEK, dev_state))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK)).
+
+(* G2: LeakedLTK + LeakedAK at composition — EXPECTED FALSE
+ * Key query for Path 2 after CV modification: if AK forgery then
+ * requires forging both Evidence (privAK) and the new CV signature
+ * (privLTK), this should become TRUE, confirming Path 2 is closed. *)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, pubEK: pubkey, dev_state: bitstring,
+      pubAK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode,
+                         kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode,
+                                kc, ks, ems, cr, sr, pubEK, dev_state))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedAK(pubAK)).
+
+(* G3: LeakedLTK + LeakedEK at composition — EXPECTED FALSE
+   Key query for Path 1 after CV modification: if EK relay then
+   requires both privEK and privLTK, this should become TRUE,
+   confirming Path 1 is closed.
+*)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, pubEK: pubkey, dev_state: bitstring,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode,
+                         kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode,
+                                kc, ks, ems, cr, sr, pubEK, dev_state))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedEK(pubEK)).
+
+(* G4: LeakedLTK + LeakedAK + LeakedEK at composition — EXPECTED TRUE
+   D5 (LeakedAK + LeakedEK) is already TRUE. Adding LeakedLTK to that
+   escape set cannot narrow the result — monotonicity of disjunction.
+   LTK is structurally inert at this layer; the TRUE result is entirely
+   carried by the LeakedAK disjunct inherited from D5. 
+*)
+query ID_S: identity, pubLTK: pubkey, psk: preSharedKey,
+      offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, pubEK: pubkey, dev_state: bitstring,
+      pubAK: pubkey,
+      badEl: element,
+      cr': random, sr': random;
+    inj-event(ClientComp(ID_S, pubLTK, psk, offer, mode,
+                         kc, ks, ems, rms, cr, sr, pubEK, dev_state))
+    ==> inj-event(PreServerComp(ID_S, pubLTK, psk, offer, mode,
+                                kc, ks, ems, cr, sr, pubEK, dev_state))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK))
+     || event(LeakedAK(pubAK))
+     || event(LeakedEK(pubEK)).
+
+(* G5: LeakedLTK alone at end-to-end — EXPECTED FALSE
+ * Closes the G-sequence at the app data layer consistent with G6. *)
+query ID_S: identity, pubEK: pubkey, pubAK: pubkey,
+      psk: preSharedKey, offer: params, mode: params,
+      kc: ae_key, ks: ae_key, ems: bitstring, rms: bitstring,
+      cr: random, sr: random, pubLTK: pubkey,
+      dev_state: bitstring, app_data: bitstring,
+      badEl: element,
+      cr': random, sr': random;
+    event(ClientReceivesAppData(ID_S, pubEK, pubAK, psk, offer, mode,
+                                kc, ks, ems, rms, cr, sr, pubLTK,
+                                dev_state, app_data))
+    ==> event(ServerSendsAppData(ID_S, pubEK, pubAK, psk, offer, mode,
+                                 kc, ks, ems, rms, cr, sr, pubLTK,
+                                 dev_state, app_data))
+     || event(ServerChoosesKEX(cr', sr', DHE_13(WeakDH, badEl)))
+     || event(ServerChoosesHash(cr', sr', WeakHash))
+     || event(SentBadElement)
+     || event(LeakedLTK(pubLTK)).
