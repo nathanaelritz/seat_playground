@@ -9,6 +9,7 @@ Query not event(ClientFinished(pubLTK_6,pubAK_5,psk_2,cr_2,sr_2,offer_2,mode_2,k
 
 Query not event(PostServerFinished(pubLTK_6,pubAK_5,psk_2,cr_2,sr_2,offer_2,mode_2,kc_4,ks_4,ems_4,rms_2)) is false.
 
+
 Query not event(ClientComp(ID_S_4,pubLTK_6,pubAK_5,psk_2,offer_2,mode_2,kc_4,ks_4,ems_4,rms_2,cr_2,sr_2,pubAIK_3,dev_state)) is false.
 
 Query not event(PostServerComp(ID_S_4,pubLTK_6,pubAK_5,psk_2,offer_2,mode_2,kc_4,ks_4,ems_4,rms_2,cr_2,sr_2,pubAIK_3,dev_state)) is false.

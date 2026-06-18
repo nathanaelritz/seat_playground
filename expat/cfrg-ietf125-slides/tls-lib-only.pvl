@@ -306,7 +306,7 @@ fun FIN(bitstring):msg [data].  (* Finished *)
 event test4.
 
 event Sent(bitstring).
-event SentWithPubLTK(bitstring,pubkey).
+event SentWithPubEK(bitstring,pubkey).
 event Accepted(bitstring,pubkey).
 event AcceptedWithPubLTK(bitstring,pubkey,pubkey).
 event SentRdata(bitstring).
